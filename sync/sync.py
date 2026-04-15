@@ -182,47 +182,61 @@ def fetch_activities(start: date, end: date) -> list[dict]:
 
 # ─── Sync loop ─────────────────────────────────────────────────────────────────
 
+CHUNK_DAYS = 30   # save to DB every N days during backfill
+
+
 def sync_range(start: date, end: date):
-    """Sync all data types for a date range."""
-    conn = db.get_conn()
-    log.info(f"Syncing {start} → {end} ...")
-
-    daily_rows, sleep_rows, hrv_rows = [], [], []
-
+    """Sync all data types for a date range, saving in 30-day chunks."""
     total_days = (end - start).days + 1
     is_large_backfill = total_days > 30
+    log.info(f"Syncing {start} → {end} ({total_days} days)...")
 
-    d = start
-    while d <= end:
-        row = fetch_daily_summary(d)
-        if row:
-            daily_rows.append(row)
+    chunk_start = start
+    total_saved = {"daily": 0, "sleep": 0, "hrv": 0, "activities": 0}
 
-        row = fetch_sleep(d)
-        if row:
-            sleep_rows.append(row)
+    while chunk_start <= end:
+        chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS - 1), end)
+        conn = db.get_conn()
 
-        row = fetch_hrv(d)
-        if row:
-            hrv_rows.append(row)
+        daily_rows, sleep_rows, hrv_rows = [], [], []
+        d = chunk_start
+        while d <= chunk_end:
+            row = fetch_daily_summary(d)
+            if row:
+                daily_rows.append(row)
+            row = fetch_sleep(d)
+            if row:
+                sleep_rows.append(row)
+            row = fetch_hrv(d)
+            if row:
+                hrv_rows.append(row)
+            d += timedelta(days=1)
+            if is_large_backfill:
+                time.sleep(0.4)
 
-        d += timedelta(days=1)
-        # Throttle large backfills to avoid rate-limiting
-        if is_large_backfill:
-            time.sleep(0.4)
+        activity_rows = fetch_activities(chunk_start, chunk_end)
 
-    activity_rows = fetch_activities(start, end)
+        db.upsert_daily_summary(conn, daily_rows)
+        db.upsert_sleep(conn, sleep_rows)
+        db.upsert_hrv(conn, hrv_rows)
+        db.upsert_activities(conn, activity_rows)
+        conn.close()
 
-    db.upsert_daily_summary(conn, daily_rows)
-    db.upsert_sleep(conn, sleep_rows)
-    db.upsert_hrv(conn, hrv_rows)
-    db.upsert_activities(conn, activity_rows)
+        total_saved["daily"]      += len(daily_rows)
+        total_saved["sleep"]      += len(sleep_rows)
+        total_saved["hrv"]        += len(hrv_rows)
+        total_saved["activities"] += len(activity_rows)
+        log.info(
+            f"Chunk {chunk_start} → {chunk_end} saved — "
+            f"daily:{len(daily_rows)} sleep:{len(sleep_rows)} "
+            f"hrv:{len(hrv_rows)} activities:{len(activity_rows)}"
+        )
+        chunk_start = chunk_end + timedelta(days=1)
 
     log.info(
-        f"Saved — daily:{len(daily_rows)} sleep:{len(sleep_rows)} "
-        f"hrv:{len(hrv_rows)} activities:{len(activity_rows)}"
+        f"Done — total daily:{total_saved['daily']} sleep:{total_saved['sleep']} "
+        f"hrv:{total_saved['hrv']} activities:{total_saved['activities']}"
     )
-    conn.close()
 
 
 def main():
