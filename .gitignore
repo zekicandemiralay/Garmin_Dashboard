@@ -1,0 +1,26 @@
+# Environment — NEVER commit your real credentials
+.env
+.env.*
+!.env.example
+
+# Claude Code project data
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Garmin OAuth tokens — never commit these
+garth_tokens/
+.garth_tokens/
+.garth_test_tokens/
+
+# Docker volumes (local dev)
+postgres_data/
+
+# OS
+.DS_Store
+Thumbs.db

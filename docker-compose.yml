@@ -1,0 +1,50 @@
+services:
+
+  db:
+    image: postgres:16
+    container_name: garmin_db
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+  sync:
+    build: ./sync
+    container_name: garmin_sync
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SYNC_BACKFILL_DAYS: 3650   # ~10 years — pulls all available Garmin history on first run
+    depends_on:
+      - db
+    volumes:
+      - ./garth_tokens:/root/.garth  # pre-generated tokens from garmin_login.py (no password needed)
+
+  api:
+    build: ./api
+    container_name: garmin_api
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    container_name: garmin_frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3000:80"
+
+volumes:
+  postgres_data:
