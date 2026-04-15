@@ -27,6 +27,10 @@ export default function RollingHRChart({ data }: Props) {
     }
   })
 
+  const validHR = hrs.filter((v): v is number => v != null)
+  const yMin = validHR.length ? Math.floor(Math.min(...validHR) / 5) * 5 - 5 : 40
+  const yMax = validHR.length ? Math.ceil(Math.max(...validHR)  / 5) * 5 + 5 : 100
+
   const TOOLTIP_STYLE = { backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: 8 }
 
   return (
@@ -43,7 +47,7 @@ export default function RollingHRChart({ data }: Props) {
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
           <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-          <YAxis domain={['auto', 'auto']} tick={{ fontSize: 11, fill: '#94a3b8' }} unit=" bpm" />
+          <YAxis domain={[yMin, yMax]} tick={{ fontSize: 11, fill: '#94a3b8' }} unit=" bpm" />
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
             labelStyle={{ color: '#cbd5e1' }}

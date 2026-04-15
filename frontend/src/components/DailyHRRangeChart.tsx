@@ -15,6 +15,10 @@ export default function DailyHRRangeChart({ data }: Props) {
   const maxHrs = data.map(r => r.max_hr_day)
   const mean7  = rollingMean(maxHrs, 7)
 
+  const allHR = data.flatMap(r => [r.min_hr_day, r.resting_hr, r.max_hr_day]).filter((v): v is number => v != null)
+  const yMin = allHR.length ? Math.floor(Math.min(...allHR) / 5) * 5 - 5 : 40
+  const yMax = allHR.length ? Math.ceil(Math.max(...allHR)  / 5) * 5 + 5 : 200
+
   const chartData = data.map((r, i) => {
     const min     = r.min_hr_day
     const resting = r.resting_hr
@@ -47,7 +51,7 @@ export default function DailyHRRangeChart({ data }: Props) {
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
           <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-          <YAxis domain={['auto', 'auto']} tick={{ fontSize: 11, fill: '#94a3b8' }} unit=" bpm" />
+          <YAxis domain={[yMin, yMax]} tick={{ fontSize: 11, fill: '#94a3b8' }} unit=" bpm" />
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
             labelStyle={{ color: '#cbd5e1' }}
