@@ -1,3 +1,4 @@
+import json
 import os
 import psycopg2
 from psycopg2.extras import execute_values
@@ -123,16 +124,34 @@ def upsert_activities(conn, rows: list[dict]):
         INSERT INTO activities (
             activity_id, start_time, activity_type, name,
             duration_seconds, distance_meters, avg_hr, max_hr, calories,
-            avg_pace_sec_per_km, aerobic_te, anaerobic_te
+            avg_pace_sec_per_km, aerobic_te, anaerobic_te,
+            start_lat, start_lng, elevation_gain_m, avg_speed_mps, avg_cadence, avg_power
         ) VALUES %s
-        ON CONFLICT (activity_id) DO NOTHING
+        ON CONFLICT (activity_id) DO UPDATE SET
+            start_lat        = EXCLUDED.start_lat,
+            start_lng        = EXCLUDED.start_lng,
+            elevation_gain_m = EXCLUDED.elevation_gain_m,
+            avg_speed_mps    = EXCLUDED.avg_speed_mps,
+            avg_cadence      = EXCLUDED.avg_cadence,
+            avg_power        = EXCLUDED.avg_power
     """
     values = [(
         r["activity_id"], r.get("start_time"), r.get("activity_type"), r.get("name"),
         r.get("duration_seconds"), r.get("distance_meters"),
         r.get("avg_hr"), r.get("max_hr"), r.get("calories"),
         r.get("avg_pace_sec_per_km"), r.get("aerobic_te"), r.get("anaerobic_te"),
+        r.get("start_lat"), r.get("start_lng"), r.get("elevation_gain_m"),
+        r.get("avg_speed_mps"), r.get("avg_cadence"), r.get("avg_power"),
     ) for r in rows]
     with conn.cursor() as cur:
         execute_values(cur, sql, values)
+    conn.commit()
+
+
+def upsert_activity_gps(conn, activity_id: int, polyline: list):
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE activities SET polyline = %s WHERE activity_id = %s",
+            (json.dumps(polyline), activity_id),
+        )
     conn.commit()

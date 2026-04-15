@@ -173,11 +173,65 @@ def fetch_activities(start: date, end: date) -> list[dict]:
                 "avg_pace_sec_per_km":  pace,
                 "aerobic_te":           a.get("aerobicTrainingEffect"),
                 "anaerobic_te":         a.get("anaerobicTrainingEffect"),
+                "start_lat":            a.get("startLatitude"),
+                "start_lng":            a.get("startLongitude"),
+                "elevation_gain_m":     a.get("elevationGain"),
+                "avg_speed_mps":        a.get("averageSpeed"),
+                "avg_cadence":          a.get("averageRunningCadenceInStepsPerMinute") or a.get("averageCadence"),
+                "avg_power":            a.get("averagePower"),
             })
         return result
     except Exception as e:
         log.warning(f"Activities fetch failed: {e}")
         return []
+
+
+# ─── GPS helpers ───────────────────────────────────────────────────────────────
+
+def extract_polyline(details: dict) -> list | None:
+    descriptors = {d["metricsIndex"]: d["key"] for d in details.get("metricDescriptors", [])}
+    lat_idx = next((i for i, k in descriptors.items() if k == "directLatitude"), None)
+    lng_idx = next((i for i, k in descriptors.items() if k == "directLongitude"), None)
+    if lat_idx is None or lng_idx is None:
+        return None
+    points = []
+    for sample in details.get("activityDetailMetrics", []):
+        m = sample.get("metrics", [])
+        if lat_idx < len(m) and lng_idx < len(m):
+            lat, lng = m[lat_idx], m[lng_idx]
+            if lat and lng and abs(lat) > 0.001:
+                points.append([round(lat, 6), round(lng, 6)])
+    if len(points) > 600:
+        step = max(1, len(points) // 600)
+        points = points[::step]
+    return points if len(points) >= 3 else None
+
+
+def sync_missing_gps(conn, max_fetch: int = 15):
+    """Fetch GPS polylines for the most recent activities that don't have one yet."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT activity_id FROM activities
+            WHERE polyline IS NULL AND start_lat IS NOT NULL
+            ORDER BY start_time DESC
+            LIMIT %s
+        """, (max_fetch,))
+        ids = [r[0] for r in cur.fetchall()]
+    if not ids:
+        return
+    log.info(f"GPS: fetching polylines for {len(ids)} activities ...")
+    stored = 0
+    for aid in ids:
+        try:
+            details = client.get_activity_details(aid, maxpollen=1000)
+            polyline = extract_polyline(details)
+            db.upsert_activity_gps(conn, aid, polyline or [])
+            if polyline:
+                stored += 1
+            time.sleep(0.5)
+        except Exception as e:
+            log.warning(f"GPS fetch failed for {aid}: {e}")
+    log.info(f"GPS: stored {stored}/{len(ids)} polylines")
 
 
 # ─── Sync loop ─────────────────────────────────────────────────────────────────
@@ -254,6 +308,9 @@ def main():
             start = today - timedelta(days=2)
 
         sync_range(start, today)
+        conn = db.get_conn()
+        sync_missing_gps(conn)
+        conn.close()
         log.info(f"Sleeping {INTERVAL}s until next sync...")
         time.sleep(INTERVAL)
 

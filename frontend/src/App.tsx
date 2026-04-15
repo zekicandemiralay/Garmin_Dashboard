@@ -21,6 +21,9 @@ import FloorsChart from './components/FloorsChart'
 import TrainingLoadChart from './components/TrainingLoadChart'
 import ActivityHeatmap from './components/ActivityHeatmap'
 import ActivitiesTable from './components/ActivitiesTable'
+import ActivityMap from './components/ActivityMap'
+import ActivityPaceChart from './components/ActivityPaceChart'
+import PersonalBestsTable from './components/PersonalBestsTable'
 
 // ─── Range ────────────────────────────────────────────────────────────────────
 
@@ -238,6 +241,12 @@ export default function App() {
             {/* ── Activity ─────────────────────────────────────────────── */}
             {tab === 'Activity' && (
               <>
+                <ActivityMap start={start} end={end} />
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <ActivityPaceChart data={activities} />
+                  <PersonalBestsTable data={activities} />
+                </div>
+                <TrainingLoadChart data={activities} />
                 {activities.length > 0 && dataRange.earliest && (
                   <ActivityHeatmap
                     data={activities}
@@ -245,7 +254,6 @@ export default function App() {
                     latest={dataRange.latest ?? today()}
                   />
                 )}
-                <TrainingLoadChart data={activities} />
                 <ActivitiesTable data={activities} />
               </>
             )}

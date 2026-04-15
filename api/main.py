@@ -140,6 +140,31 @@ def get_hrv(
 
 # ─── Activities ───────────────────────────────────────────────────────────────
 
+@app.get("/api/activities/map")
+def get_activities_map(
+    start: Optional[date] = Query(default=None),
+    end:   Optional[date] = Query(default=None),
+):
+    """Activities with GPS data (dots + polylines) for the map view."""
+    if start is None or end is None:
+        start, end = default_range()
+    with db.cursor() as cur:
+        cur.execute(
+            """
+            SELECT activity_id, start_time, activity_type, name,
+                   duration_seconds, distance_meters, avg_hr, calories,
+                   avg_pace_sec_per_km, elevation_gain_m,
+                   start_lat, start_lng, polyline
+            FROM activities
+            WHERE start_time::date BETWEEN %s AND %s
+            ORDER BY start_time DESC
+            LIMIT 1000
+            """,
+            (start, end),
+        )
+        return cur.fetchall()
+
+
 @app.get("/api/activities")
 def get_activities(
     start: Optional[date] = Query(default=None),
@@ -154,7 +179,8 @@ def get_activities(
                 """
                 SELECT activity_id, start_time, activity_type, name,
                        duration_seconds, distance_meters, avg_hr, max_hr,
-                       calories, avg_pace_sec_per_km, aerobic_te, anaerobic_te
+                       calories, avg_pace_sec_per_km, aerobic_te, anaerobic_te,
+                       start_lat, start_lng, elevation_gain_m, avg_speed_mps, avg_cadence, avg_power
                 FROM activities
                 WHERE start_time::date BETWEEN %s AND %s
                   AND activity_type = %s
@@ -167,7 +193,8 @@ def get_activities(
                 """
                 SELECT activity_id, start_time, activity_type, name,
                        duration_seconds, distance_meters, avg_hr, max_hr,
-                       calories, avg_pace_sec_per_km, aerobic_te, anaerobic_te
+                       calories, avg_pace_sec_per_km, aerobic_te, anaerobic_te,
+                       start_lat, start_lng, elevation_gain_m, avg_speed_mps, avg_cadence, avg_power
                 FROM activities
                 WHERE start_time::date BETWEEN %s AND %s
                 ORDER BY start_time ASC

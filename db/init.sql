@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS daily_summary (
     spo2_min            FLOAT,
     hydration_ml        INT,
     resting_hr          INT,
+    min_hr_day          INT,
+    max_hr_day          INT,
     created_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -65,6 +67,13 @@ CREATE TABLE IF NOT EXISTS activities (
     avg_pace_sec_per_km FLOAT,
     aerobic_te          FLOAT,             -- Training Effect (aerobic)
     anaerobic_te        FLOAT,             -- Training Effect (anaerobic)
+    start_lat           DOUBLE PRECISION,
+    start_lng           DOUBLE PRECISION,
+    elevation_gain_m    FLOAT,
+    avg_speed_mps       FLOAT,
+    avg_cadence         INTEGER,
+    avg_power           INTEGER,
+    polyline            JSONB,
     created_at          TIMESTAMPTZ DEFAULT NOW()
 );
 

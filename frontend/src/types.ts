@@ -61,6 +61,28 @@ export interface Activity {
   avg_pace_sec_per_km: number | null
   aerobic_te: number | null
   anaerobic_te: number | null
+  start_lat: number | null
+  start_lng: number | null
+  elevation_gain_m: number | null
+  avg_speed_mps: number | null
+  avg_cadence: number | null
+  avg_power: number | null
+}
+
+export interface MapActivity {
+  activity_id: number
+  start_time: string
+  activity_type: string
+  name: string
+  duration_seconds: number | null
+  distance_meters: number | null
+  avg_hr: number | null
+  calories: number | null
+  avg_pace_sec_per_km: number | null
+  elevation_gain_m: number | null
+  start_lat: number | null
+  start_lng: number | null
+  polyline: [number, number][] | null
 }
 
 export interface Summary {
