@@ -297,19 +297,38 @@ def sync_range(start: date, end: date):
     )
 
 
+def get_latest_synced_date() -> date | None:
+    """Return the latest date that has real data in the DB, or None if DB is empty."""
+    try:
+        conn = db.get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT GREATEST(
+                    (SELECT MAX(date) FROM daily_summary WHERE steps IS NOT NULL),
+                    (SELECT MAX(date) FROM sleep       WHERE duration_seconds IS NOT NULL)
+                )
+            """)
+            row = cur.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
 def main():
     login()
-    first_run = True
 
     while True:
         today = date.today()
+        latest = get_latest_synced_date()
 
-        if first_run:
+        if latest is None:
             start = today - timedelta(days=BACKFILL_DAYS)
-            log.info(f"First run — backfilling {BACKFILL_DAYS} days from {start}.")
-            first_run = False
+            log.info(f"Empty DB — backfilling {BACKFILL_DAYS} days from {start}.")
         else:
-            start = today - timedelta(days=2)
+            # Overlap 7 days to catch any late-arriving or corrected data
+            start = latest - timedelta(days=7)
+            log.info(f"Incremental sync from {start} (DB latest: {latest}).")
 
         sync_range(start, today)
         conn = db.get_conn()

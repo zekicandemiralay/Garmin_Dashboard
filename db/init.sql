@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS activities (
     anaerobic_te        FLOAT,             -- Training Effect (anaerobic)
     start_lat           DOUBLE PRECISION,
     start_lng           DOUBLE PRECISION,
+    end_lat             DOUBLE PRECISION,
+    end_lng             DOUBLE PRECISION,
     elevation_gain_m    FLOAT,
     avg_speed_mps       FLOAT,
     avg_cadence         INTEGER,
