@@ -259,7 +259,7 @@ export default function App() {
                   <PersonalBestsTable
                     activities={activities}
                     daily={daily}
-                    onSelectActivity={id => { setMapHighlightId(id); setTab('Activity') }}
+                    onSelectActivity={id => { setMapHighlightId(id); setTab('Activity'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
                   />
                 </div>
                 <TrainingLoadChart data={activities} />
@@ -270,7 +270,7 @@ export default function App() {
                     latest={dataRange.latest ?? today()}
                   />
                 )}
-                <ActivitiesTable data={activities} />
+                <ActivitiesTable data={activities} onSelectActivity={id => { setMapHighlightId(id); setTab('Activity'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
               </>
             )}
           </>

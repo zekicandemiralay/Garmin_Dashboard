@@ -1,6 +1,6 @@
 import type { Activity } from '../types'
 
-interface Props { data: Activity[] }
+interface Props { data: Activity[]; onSelectActivity?: (id: number) => void }
 
 const ACTIVITY_COLORS: Record<string, string> = {
   RUNNING:  'bg-orange-500/20 text-orange-300',
@@ -29,7 +29,7 @@ function formatDuration(s: number | null): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
-export default function ActivitiesTable({ data }: Props) {
+export default function ActivitiesTable({ data, onSelectActivity }: Props) {
   const sorted = [...data].sort((a, b) =>
     new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
   )
@@ -58,7 +58,11 @@ export default function ActivitiesTable({ data }: Props) {
               {sorted.map(a => {
                 const badge = ACTIVITY_COLORS[a.activity_type] ?? defaultBadge
                 return (
-                  <tr key={a.activity_id} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
+                  <tr
+                    key={a.activity_id}
+                    onClick={onSelectActivity ? () => onSelectActivity(a.activity_id) : undefined}
+                    className={`border-b border-slate-700/50 transition-colors ${onSelectActivity ? 'cursor-pointer hover:bg-blue-500/10' : 'hover:bg-slate-700/30'}`}
+                  >
                     <td className="py-2 pr-4 text-slate-400">
                       {new Date(a.start_time).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
                     </td>

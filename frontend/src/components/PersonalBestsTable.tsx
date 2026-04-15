@@ -170,7 +170,7 @@ export default function PersonalBestsTable({ activities, daily, onSelectActivity
   )
 
   const goToActivity = onSelectActivity
-    ? (a: Activity) => onSelectActivity(a.activity_id)
+    ? (a: Activity) => { onSelectActivity(a.activity_id); setExpanded(null) }
     : undefined
 
   // ── Best cards definition ──────────────────────────────────
