@@ -297,6 +297,30 @@ def sync_range(start: date, end: date):
     )
 
 
+def ensure_schema():
+    """Apply any missing columns so sync never fails on a stale schema."""
+    conn = db.get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            ALTER TABLE activities
+                ADD COLUMN IF NOT EXISTS end_lat          DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS end_lng          DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS start_lat        DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS start_lng        DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS elevation_gain_m FLOAT,
+                ADD COLUMN IF NOT EXISTS avg_speed_mps    FLOAT,
+                ADD COLUMN IF NOT EXISTS avg_cadence      INTEGER,
+                ADD COLUMN IF NOT EXISTS avg_power        INTEGER,
+                ADD COLUMN IF NOT EXISTS polyline         JSONB;
+            ALTER TABLE daily_summary
+                ADD COLUMN IF NOT EXISTS min_hr_day INTEGER,
+                ADD COLUMN IF NOT EXISTS max_hr_day INTEGER
+        """)
+    conn.commit()
+    conn.close()
+    log.info("Schema check done.")
+
+
 def get_latest_synced_date() -> date | None:
     """Return the latest date that has real data in the DB, or None if DB is empty."""
     try:
@@ -317,6 +341,7 @@ def get_latest_synced_date() -> date | None:
 
 def main():
     login()
+    ensure_schema()
 
     while True:
         today = date.today()
