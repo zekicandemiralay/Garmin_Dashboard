@@ -154,7 +154,7 @@ def get_activities_map(
             SELECT activity_id, start_time, activity_type, name,
                    duration_seconds, distance_meters, avg_hr, calories,
                    avg_pace_sec_per_km, elevation_gain_m,
-                   start_lat, start_lng, polyline
+                   start_lat, start_lng, end_lat, end_lng, polyline
             FROM activities
             WHERE start_time::date BETWEEN %s AND %s
             ORDER BY start_time DESC

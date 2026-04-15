@@ -125,11 +125,14 @@ def upsert_activities(conn, rows: list[dict]):
             activity_id, start_time, activity_type, name,
             duration_seconds, distance_meters, avg_hr, max_hr, calories,
             avg_pace_sec_per_km, aerobic_te, anaerobic_te,
-            start_lat, start_lng, elevation_gain_m, avg_speed_mps, avg_cadence, avg_power
+            start_lat, start_lng, end_lat, end_lng,
+            elevation_gain_m, avg_speed_mps, avg_cadence, avg_power
         ) VALUES %s
         ON CONFLICT (activity_id) DO UPDATE SET
             start_lat        = EXCLUDED.start_lat,
             start_lng        = EXCLUDED.start_lng,
+            end_lat          = EXCLUDED.end_lat,
+            end_lng          = EXCLUDED.end_lng,
             elevation_gain_m = EXCLUDED.elevation_gain_m,
             avg_speed_mps    = EXCLUDED.avg_speed_mps,
             avg_cadence      = EXCLUDED.avg_cadence,
@@ -140,8 +143,8 @@ def upsert_activities(conn, rows: list[dict]):
         r.get("duration_seconds"), r.get("distance_meters"),
         r.get("avg_hr"), r.get("max_hr"), r.get("calories"),
         r.get("avg_pace_sec_per_km"), r.get("aerobic_te"), r.get("anaerobic_te"),
-        r.get("start_lat"), r.get("start_lng"), r.get("elevation_gain_m"),
-        r.get("avg_speed_mps"), r.get("avg_cadence"), r.get("avg_power"),
+        r.get("start_lat"), r.get("start_lng"), r.get("end_lat"), r.get("end_lng"),
+        r.get("elevation_gain_m"), r.get("avg_speed_mps"), r.get("avg_cadence"), r.get("avg_power"),
     ) for r in rows]
     with conn.cursor() as cur:
         execute_values(cur, sql, values)

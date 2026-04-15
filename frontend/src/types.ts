@@ -82,6 +82,8 @@ export interface MapActivity {
   elevation_gain_m: number | null
   start_lat: number | null
   start_lng: number | null
+  end_lat: number | null
+  end_lng: number | null
   polyline: [number, number][] | null
 }
 

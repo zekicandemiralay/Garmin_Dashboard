@@ -175,6 +175,8 @@ def fetch_activities(start: date, end: date) -> list[dict]:
                 "anaerobic_te":         a.get("anaerobicTrainingEffect"),
                 "start_lat":            a.get("startLatitude"),
                 "start_lng":            a.get("startLongitude"),
+                "end_lat":              a.get("endLatitude"),
+                "end_lng":              a.get("endLongitude"),
                 "elevation_gain_m":     a.get("elevationGain"),
                 "avg_speed_mps":        a.get("averageSpeed"),
                 "avg_cadence":          a.get("averageRunningCadenceInStepsPerMinute") or a.get("averageCadence"),
