@@ -24,14 +24,11 @@ export default function DailyHRRangeChart({ data }: Props) {
     const resting = r.resting_hr
     const max     = r.max_hr_day
     return {
-      date:     fmt(r.date),
-      // Stacked area trick: invisible base up to min, then fill the hr range
-      base:     min,
-      range:    min != null && max != null ? max - min : null,
-      resting:  resting,
-      max:      max,
-      min:      min,
-      maxAvg7:  mean7[i] != null ? +mean7[i]!.toFixed(1) : null,
+      date:    fmt(r.date),
+      // Native Recharts range area: [lower, upper] tuple — no stacking needed
+      hrRange: min != null && max != null ? [min, max] : null,
+      resting, max, min,
+      maxAvg7: mean7[i] != null ? +mean7[i]!.toFixed(1) : null,
     }
   })
 
@@ -55,18 +52,17 @@ export default function DailyHRRangeChart({ data }: Props) {
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
             labelStyle={{ color: '#cbd5e1' }}
-            formatter={(v: number, name: string) => {
-              if (name === 'base' || name === 'range') return [null, null]
+            formatter={(v: unknown, name: string) => {
+              if (name === 'hrRange') return [null, null]
               return [`${v} bpm`, name]
             }}
           />
           <Legend
             wrapperStyle={{ fontSize: 12, color: '#94a3b8' }}
-            formatter={v => (v === 'base' || v === 'range') ? null : v}
+            formatter={v => v === 'hrRange' ? null : v}
           />
-          {/* Filled HR range band */}
-          <Area type="monotone" dataKey="base"    stackId="r" stroke="none" fill="transparent"    legendType="none" />
-          <Area type="monotone" dataKey="range"   stackId="r" stroke="none" fill="url(#hrRange)"  name="Daily range" legendType="square" />
+          {/* Filled HR range band via native range area [min, max] */}
+          <Area type="monotone" dataKey="hrRange" stroke="none" fill="url(#hrRange)" name="Daily range" legendType="square" />
           {/* Min HR line */}
           <Line type="monotone" dataKey="min"     name="Min HR"         stroke="#94a3b8" strokeWidth={1}   dot={false} connectNulls strokeOpacity={0.6} />
           {/* Resting HR */}

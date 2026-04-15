@@ -18,12 +18,11 @@ export default function RollingHRChart({ data }: Props) {
     const m = mean[i]
     const s = std[i]
     return {
-      date:      fmt(r.date),
-      hr:        r.resting_hr,
-      mean7:     m != null ? +m.toFixed(1) : null,
-      // band: stacked area trick — bandMin then bandWidth on top
-      bandMin:   m != null && s != null ? +(m - s).toFixed(1) : null,
-      bandWidth: m != null && s != null ? +(2 * s).toFixed(1) : null,
+      date:  fmt(r.date),
+      hr:    r.resting_hr,
+      mean7: m != null ? +m.toFixed(1) : null,
+      // Native Recharts range area: [lower, upper] tuple — no stacking needed
+      band:  m != null && s != null ? [+(m - s).toFixed(1), +(m + s).toFixed(1)] : null,
     }
   })
 
@@ -51,18 +50,17 @@ export default function RollingHRChart({ data }: Props) {
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
             labelStyle={{ color: '#cbd5e1' }}
-            formatter={(v: number, name: string) => {
-              if (name === 'bandMin' || name === 'bandWidth') return [null, null]
+            formatter={(v: unknown, name: string) => {
+              if (name === 'band') return [null, null]
               return [`${v} bpm`, name]
             }}
           />
           <Legend
             wrapperStyle={{ fontSize: 12, color: '#94a3b8' }}
-            formatter={(v) => v === 'bandMin' || v === 'bandWidth' ? null : v}
+            formatter={(v) => v === 'band' ? null : v}
           />
-          {/* ±1σ band via stacked areas */}
-          <Area type="monotone" dataKey="bandMin"   stackId="band" stroke="none" fill="transparent"       legendType="none" />
-          <Area type="monotone" dataKey="bandWidth" stackId="band" stroke="none" fill="url(#hrBand)"      name="±1σ band"   legendType="square" />
+          {/* ±1σ band via native range area [lower, upper] */}
+          <Area type="monotone" dataKey="band" stroke="none" fill="url(#hrBand)" name="±1σ band" legendType="square" />
           {/* Raw daily values */}
           <Line type="monotone" dataKey="hr"    name="Resting HR"   stroke="#f87171" strokeWidth={1} dot={false} strokeOpacity={0.5} connectNulls />
           {/* 7-day rolling mean */}
