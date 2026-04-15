@@ -66,7 +66,10 @@ function Spinner() {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('Overview')
-  const [rangeLabel, setRangeLabel] = useState<RangeLabel>('30d')
+  const [rangeLabel, setRangeLabel] = useState<RangeLabel | null>('30d')
+  const [customStart, setCustomStart] = useState<string | null>(null)
+  const [customEnd,   setCustomEnd]   = useState<string | null>(null)
+  const [mapHighlightId, setMapHighlightId] = useState<number | null>(null)
   const [dataRange, setDataRange] = useState<DataRange>({ earliest: null, latest: null })
 
   const [daily, setDaily] = useState<DailyRow[]>([])
@@ -83,12 +86,11 @@ export default function App() {
     fetchRange().then(setDataRange).catch(() => {})
   }, [])
 
-  // Derive start/end from selected range
+  // Derive start/end — custom dates take priority over presets
   const { start, end } = (() => {
+    if (customStart && customEnd) return { start: customStart, end: customEnd }
     const e = today()
-    if (rangeLabel === 'All') {
-      return { start: dataRange.earliest ?? daysAgo(365), end: e }
-    }
+    if (rangeLabel === 'All') return { start: dataRange.earliest ?? daysAgo(365), end: e }
     const preset = PRESET_RANGES.find(r => r.label === rangeLabel)!
     return { start: daysAgo(preset.days as number), end: e }
   })()
@@ -140,7 +142,7 @@ export default function App() {
           {PRESET_RANGES.map(({ label }) => (
             <button
               key={label}
-              onClick={() => setRangeLabel(label)}
+              onClick={() => { setRangeLabel(label); setCustomStart(null); setCustomEnd(null) }}
               className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                 rangeLabel === label ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
               }`}
@@ -148,6 +150,11 @@ export default function App() {
               {label}
             </button>
           ))}
+          {customStart && customEnd && (
+            <div className="px-3 py-1 rounded-md text-sm font-medium bg-blue-600 text-white">
+              {customStart.slice(5)} – {customEnd.slice(5)}
+            </div>
+          )}
         </div>
       </header>
 
@@ -241,10 +248,19 @@ export default function App() {
             {/* ── Activity ─────────────────────────────────────────────── */}
             {tab === 'Activity' && (
               <>
-                <ActivityMap start={start} end={end} />
+                <ActivityMap
+                  start={start}
+                  end={end}
+                  highlightedId={mapHighlightId}
+                  onRangeChange={(s, e) => { setCustomStart(s); setCustomEnd(e); setRangeLabel(null) }}
+                />
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <ActivityPaceChart data={activities} />
-                  <PersonalBestsTable activities={activities} daily={daily} />
+                  <PersonalBestsTable
+                    activities={activities}
+                    daily={daily}
+                    onSelectActivity={id => { setMapHighlightId(id); setTab('Activity') }}
+                  />
                 </div>
                 <TrainingLoadChart data={activities} />
                 {activities.length > 0 && dataRange.earliest && (

@@ -44,12 +44,14 @@ interface ModalCfg {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   rows: any[]
   cols: ColDef[]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onRowClick?: (row: any) => void
 }
 
 function Modal({ cfg, onClose }: { cfg: ModalCfg; onClose: () => void }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/70 p-4"
       onClick={onClose}
     >
       <div
@@ -91,9 +93,10 @@ function Modal({ cfg, onClose }: { cfg: ModalCfg; onClose: () => void }) {
               {cfg.rows.map((row, i) => (
                 <tr
                   key={i}
+                  onClick={cfg.onRowClick ? () => cfg.onRowClick!(row) : undefined}
                   className={`border-t border-slate-700/50 ${
                     i === 0 ? 'bg-amber-500/10' : i % 2 === 0 ? 'bg-slate-800/50' : ''
-                  }`}
+                  } ${cfg.onRowClick ? 'cursor-pointer hover:bg-blue-500/10 transition-colors' : ''}`}
                 >
                   {cfg.cols.map(c => (
                     <td
@@ -112,7 +115,7 @@ function Modal({ cfg, onClose }: { cfg: ModalCfg; onClose: () => void }) {
         </div>
 
         <div className="px-5 py-2.5 border-t border-slate-700 text-xs text-slate-500 shrink-0">
-          {cfg.rows.length} entries · click outside to close
+          {cfg.rows.length} entries{cfg.onRowClick ? ' · click a row to highlight on map' : ''} · click outside to close
         </div>
       </div>
     </div>
@@ -150,9 +153,13 @@ const D_STRESS: ColDef = { header: 'Stress',      align: 'right', cell: d => d.s
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-interface Props { activities: Activity[]; daily: DailyRow[] }
+interface Props {
+  activities: Activity[]
+  daily: DailyRow[]
+  onSelectActivity?: (id: number) => void
+}
 
-export default function PersonalBestsTable({ activities, daily }: Props) {
+export default function PersonalBestsTable({ activities, daily, onSelectActivity }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null)
 
   if (activities.length === 0 && daily.length === 0) return null
@@ -161,6 +168,10 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
   const rides = [...activities].filter(a =>
     (a.activity_type === 'CYCLING' || a.activity_type === 'MOUNTAIN_BIKING') && a.distance_meters
   )
+
+  const goToActivity = onSelectActivity
+    ? (a: Activity) => onSelectActivity(a.activity_id)
+    : undefined
 
   // ── Best cards definition ──────────────────────────────────
   type CardDef = {
@@ -183,6 +194,7 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
       title: 'All Runs — by Distance',
       subtitle: `${runs.length} runs sorted longest to shortest`,
       rows: [...runs].sort((a, b) => (b.distance_meters ?? 0) - (a.distance_meters ?? 0)),
+      onRowClick: goToActivity,
       cols: [A_RANK, A_DATE, A_NAME, A_DIST, A_DUR, A_PACE, A_ELEV, A_HR, A_CAL],
     }),
   })
@@ -198,6 +210,7 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
       title: 'All Runs — by Pace (fastest first)',
       subtitle: 'Only runs longer than 2 km · lower pace = faster',
       rows: [...fastRuns].sort((a, b) => (a.avg_pace_sec_per_km ?? 999) - (b.avg_pace_sec_per_km ?? 999)),
+      onRowClick: goToActivity,
       cols: [A_RANK, A_DATE, A_NAME, A_PACE, A_DIST, A_DUR, A_HR, A_CAD],
     }),
   })
@@ -212,6 +225,7 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
       title: 'All Rides — by Distance',
       subtitle: `${rides.length} cycling activities sorted longest to shortest`,
       rows: [...rides].sort((a, b) => (b.distance_meters ?? 0) - (a.distance_meters ?? 0)),
+      onRowClick: goToActivity,
       cols: [A_RANK, A_DATE, A_NAME, A_DIST, A_DUR, A_SPD, A_ELEV, A_HR, A_CAL],
     }),
   })
@@ -235,6 +249,7 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
         const sb = b.avg_speed_mps ?? (b.distance_meters! / b.duration_seconds!)
         return sb - sa
       }),
+      onRowClick: goToActivity,
       cols: [A_RANK, A_DATE, A_NAME, A_SPD, A_DIST, A_DUR, A_ELEV, A_HR, A_CAL],
     }),
   })
@@ -250,6 +265,7 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
       title: 'All Activities — by Duration',
       subtitle: `${withDur.length} activities sorted longest first`,
       rows: [...withDur].sort((a, b) => (b.duration_seconds ?? 0) - (a.duration_seconds ?? 0)),
+      onRowClick: goToActivity,
       cols: [A_RANK, A_DATE, A_TYPE, A_NAME, A_DUR, A_DIST, A_ELEV, A_HR, A_CAL, A_TE],
     }),
   })
@@ -265,6 +281,7 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
       title: 'All Activities — by Elevation Gain',
       subtitle: `${withElev.length} activities with elevation data`,
       rows: [...withElev].sort((a, b) => (b.elevation_gain_m ?? 0) - (a.elevation_gain_m ?? 0)),
+      onRowClick: goToActivity,
       cols: [A_RANK, A_DATE, A_TYPE, A_NAME, A_ELEV, A_DIST, A_DUR, A_HR],
     }),
   })
@@ -280,6 +297,7 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
       title: 'All Activities — by Aerobic Training Effect',
       subtitle: 'Higher = more aerobic stress. Max is 5.0',
       rows: [...withTE].sort((a, b) => (b.aerobic_te ?? 0) - (a.aerobic_te ?? 0)),
+      onRowClick: goToActivity,
       cols: [A_RANK, A_DATE, A_TYPE, A_NAME, A_TE, A_DUR, A_DIST, A_HR, A_MAXHR],
     }),
   })
@@ -295,6 +313,7 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
       title: 'All Activities — by Max Heart Rate',
       subtitle: `${withMaxHR.length} activities with HR data`,
       rows: [...withMaxHR].sort((a, b) => (b.max_hr ?? 0) - (a.max_hr ?? 0)),
+      onRowClick: goToActivity,
       cols: [A_RANK, A_DATE, A_TYPE, A_NAME, A_MAXHR, A_HR, A_DUR, A_DIST, A_CAL],
     }),
   })
@@ -310,6 +329,7 @@ export default function PersonalBestsTable({ activities, daily }: Props) {
       title: 'All Activities — by Calories Burned',
       subtitle: `${withCal.length} activities with calorie data`,
       rows: [...withCal].sort((a, b) => (b.calories ?? 0) - (a.calories ?? 0)),
+      onRowClick: goToActivity,
       cols: [A_RANK, A_DATE, A_TYPE, A_NAME, A_CAL, A_DUR, A_DIST, A_HR],
     }),
   })

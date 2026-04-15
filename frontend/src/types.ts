@@ -84,7 +84,7 @@ export interface MapActivity {
   start_lng: number | null
   end_lat: number | null
   end_lng: number | null
-  polyline: [number, number][] | null
+  polyline: number[][] | null  // each point: [lat, lng] or [lat, lng, speed_mps]
 }
 
 export interface Summary {

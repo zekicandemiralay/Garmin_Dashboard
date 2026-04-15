@@ -194,6 +194,7 @@ def extract_polyline(details: dict) -> list | None:
     descriptors = {d["metricsIndex"]: d["key"] for d in details.get("metricDescriptors", [])}
     lat_idx = next((i for i, k in descriptors.items() if k == "directLatitude"), None)
     lng_idx = next((i for i, k in descriptors.items() if k == "directLongitude"), None)
+    spd_idx = next((i for i, k in descriptors.items() if k == "directSpeed"), None)
     if lat_idx is None or lng_idx is None:
         return None
     points = []
@@ -202,7 +203,8 @@ def extract_polyline(details: dict) -> list | None:
         if lat_idx < len(m) and lng_idx < len(m):
             lat, lng = m[lat_idx], m[lng_idx]
             if lat and lng and abs(lat) > 0.001:
-                points.append([round(lat, 6), round(lng, 6)])
+                spd = m[spd_idx] if (spd_idx is not None and spd_idx < len(m)) else None
+                points.append([round(lat, 6), round(lng, 6), spd])
     if len(points) > 600:
         step = max(1, len(points) // 600)
         points = points[::step]
@@ -225,7 +227,7 @@ def sync_missing_gps(conn, max_fetch: int = 15):
     stored = 0
     for aid in ids:
         try:
-            details = client.get_activity_details(aid, maxpollen=1000)
+            details = client.get_activity_details(aid, maxpoly=4000)
             polyline = extract_polyline(details)
             db.upsert_activity_gps(conn, aid, polyline or [])
             if polyline:

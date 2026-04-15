@@ -1,23 +1,97 @@
 import { useEffect, useState, Fragment } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Polyline, Popup, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap, useMapEvents } from 'react-leaflet'
+import L from 'leaflet'
 import type { MapActivity } from '../types'
 import { fetchMapActivities } from '../api'
 
-const TYPE_COLORS: Record<string, string> = {
-  RUNNING:             '#2dd4bf',
-  TRAIL_RUNNING:       '#2dd4bf',
-  CYCLING:             '#34d399',
-  MOUNTAIN_BIKING:     '#34d399',
-  VIRTUAL_RIDE:        '#34d399',
-  HIKING:              '#f59e0b',
-  WALKING:             '#60a5fa',
-  SWIMMING:            '#818cf8',
-  OPEN_WATER_SWIMMING: '#818cf8',
-  STRENGTH_TRAINING:   '#f87171',
-  YOGA:                '#c084fc',
+// SVG pin icons for start (green) and end (red)
+function makePin(fill: string, border: string) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="30" viewBox="0 0 22 30">
+    <path d="M11 0C6.03 0 2 4.03 2 9c0 6.75 9 21 9 21s9-14.25 9-21C20 4.03 15.97 0 11 0z"
+      fill="${fill}" stroke="${border}" stroke-width="1.5"/>
+    <circle cx="11" cy="9" r="4" fill="white" opacity="0.9"/>
+  </svg>`
+  return L.divIcon({ html: svg, className: '', iconSize: [22, 30], iconAnchor: [11, 30], popupAnchor: [0, -32] })
 }
-const DEFAULT_COLOR = '#94a3b8'
-const color = (type: string) => TYPE_COLORS[type] ?? DEFAULT_COLOR
+
+const START_ICON = makePin('#16a34a', '#fff')
+const END_ICON   = makePin('#dc2626', '#fff')
+
+// Auto-fit the map to show all points
+function AutoFit({ pts }: { pts: [number, number][] }) {
+  const map = useMap()
+  useEffect(() => {
+    if (pts.length > 0) map.fitBounds(pts, { padding: [40, 40], maxZoom: 15 })
+  }, [pts.length])
+  return null
+}
+
+// Deselect when clicking on the map background
+function DeselectOnMapClick({ onDeselect }: { onDeselect: () => void }) {
+  useMapEvents({ click: onDeselect })
+  return null
+}
+
+// Map 0–1 to blue→green→yellow→red
+function speedColor(t: number): string {
+  return `hsl(${Math.round(240 - t * 240)},90%,55%)`
+}
+
+// Speed-colored polyline segments; supports dimming + bold for selection
+function SpeedPolyline({
+  points, popup, weight, opacity,
+}: {
+  points: number[][]
+  popup: React.ReactNode
+  weight: number
+  opacity: number
+}) {
+  const latLngs = points.map(p => [p[0], p[1]] as [number, number])
+  const speeds  = points.map(p => (p[2] as number | null | undefined) ?? null)
+  const valid   = speeds.filter((s): s is number => s !== null && s > 0)
+
+  if (valid.length < 2) {
+    return (
+      <Polyline positions={latLngs} pathOptions={{ color: '#94a3b8', weight, opacity }}>
+        {popup}
+      </Polyline>
+    )
+  }
+
+  const minS = Math.min(...valid), maxS = Math.max(...valid), range = maxS - minS || 1
+  const LEVELS = 8
+  const levelOf = (s: number | null) =>
+    s === null || s <= 0 ? 0 : Math.min(LEVELS - 1, Math.floor(((s - minS) / range) * LEVELS))
+
+  type Seg = { pts: [number, number][]; lvl: number }
+  const segs: Seg[] = []
+  let cur: [number, number][] = [latLngs[0]]
+  let curLvl = levelOf(speeds[0])
+  for (let i = 1; i < latLngs.length; i++) {
+    const lvl = levelOf(speeds[i])
+    cur.push(latLngs[i])
+    if (lvl !== curLvl) {
+      segs.push({ pts: [...cur], lvl: curLvl })
+      cur = [latLngs[i]]
+      curLvl = lvl
+    }
+  }
+  if (cur.length > 1) segs.push({ pts: cur, lvl: curLvl })
+
+  return (
+    <>
+      {segs.map((seg, i) => (
+        <Polyline
+          key={i}
+          positions={seg.pts}
+          pathOptions={{ color: speedColor(seg.lvl / (LEVELS - 1)), weight, opacity }}
+        >
+          {i === 0 ? popup : null}
+        </Polyline>
+      ))}
+    </>
+  )
+}
 
 function fmtDur(s: number | null) {
   if (!s) return '—'
@@ -37,58 +111,107 @@ function fmtSpeed(a: MapActivity) {
   return `${((a.distance_meters / a.duration_seconds) * 3.6).toFixed(1)} km/h`
 }
 
-// Auto-fit the map to show all points
-function AutoFit({ pts }: { pts: [number, number][] }) {
-  const map = useMap()
-  useEffect(() => {
-    if (pts.length > 0) map.fitBounds(pts, { padding: [40, 40], maxZoom: 15 })
-  }, [pts.length])
-  return null
+function ActivityPopup({ a }: { a: MapActivity }) {
+  const startDate = new Date(a.start_time)
+  const endDate   = a.duration_seconds ? new Date(startDate.getTime() + a.duration_seconds * 1000) : null
+  const timeFmt   = (d: Date) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <Popup>
+      <div style={{ fontSize: 13, minWidth: 190 }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{a.name}</div>
+        <div style={{ color: '#888', fontSize: 11, marginBottom: 6 }}>
+          {startDate.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+          {' · '}{a.activity_type.replace(/_/g, ' ')}
+        </div>
+        <div style={{ color: '#aaa', fontSize: 11, marginBottom: 8 }}>
+          {timeFmt(startDate)}{endDate ? ` – ${timeFmt(endDate)}` : ''}
+        </div>
+        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+          <tbody>
+            {a.distance_meters != null && (
+              <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Distance</td><td>{fmtDist(a.distance_meters)}</td></tr>
+            )}
+            <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Duration</td><td>{fmtDur(a.duration_seconds)}</td></tr>
+            {a.avg_pace_sec_per_km != null && (
+              <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Pace</td><td>{fmtPace(a.avg_pace_sec_per_km)}</td></tr>
+            )}
+            {fmtSpeed(a) && (
+              <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Speed</td><td>{fmtSpeed(a)}</td></tr>
+            )}
+            {a.avg_hr != null && (
+              <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Avg HR</td><td>{a.avg_hr} bpm</td></tr>
+            )}
+            {a.elevation_gain_m != null && (
+              <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Elevation</td><td>+{Math.round(a.elevation_gain_m)} m</td></tr>
+            )}
+            {a.calories != null && (
+              <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Calories</td><td>{a.calories} kcal</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Popup>
+  )
 }
 
-interface Props { start: string; end: string }
+interface Props {
+  start: string
+  end: string
+  highlightedId?: number | null
+  onRangeChange?: (start: string, end: string) => void
+}
 
-export default function ActivityMap({ start: defaultStart, end: defaultEnd }: Props) {
+export default function ActivityMap({ start: defaultStart, end: defaultEnd, highlightedId, onRangeChange }: Props) {
   const [rangeStart, setRangeStart] = useState(defaultStart)
   const [rangeEnd,   setRangeEnd]   = useState(defaultEnd)
-  const [fetched,    setFetched]    = useState<{ start: string; end: string }>({ start: defaultStart, end: defaultEnd })
+  const [fetched,    setFetched]    = useState({ start: defaultStart, end: defaultEnd })
   const [data,       setData]       = useState<MapActivity[]>([])
   const [loading,    setLoading]    = useState(true)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
 
-  // When the global range changes, sync local inputs too
   useEffect(() => {
     setRangeStart(defaultStart)
     setRangeEnd(defaultEnd)
     setFetched({ start: defaultStart, end: defaultEnd })
   }, [defaultStart, defaultEnd])
 
+  // Highlight from external source (Personal Bests click)
+  useEffect(() => {
+    if (highlightedId != null) setSelectedId(highlightedId)
+  }, [highlightedId])
+
   useEffect(() => {
     setLoading(true)
     fetchMapActivities(fetched.start, fetched.end)
-      .then(setData)
+      .then(d => { setData(d); setSelectedId(null) })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [fetched.start, fetched.end])
 
   function apply() {
-    if (rangeStart && rangeEnd && rangeStart <= rangeEnd)
+    if (rangeStart && rangeEnd && rangeStart <= rangeEnd) {
       setFetched({ start: rangeStart, end: rangeEnd })
+      onRangeChange?.(rangeStart, rangeEnd)
+    }
   }
 
   const located = data.filter(a => a.start_lat != null && a.start_lng != null)
 
-  // Collect all points for auto-fit
   const allPts: [number, number][] = located.flatMap(a => {
     const pts: [number, number][] = [[a.start_lat!, a.start_lng!]]
-    if (a.end_lat && a.end_lng) pts.push([a.end_lat, a.end_lng])
-    if (a.polyline?.length) (a.polyline as [number, number][]).forEach(p => pts.push(p))
+    if (a.polyline?.length) a.polyline.forEach(p => pts.push([p[0], p[1]]))
     return pts
   })
 
-  const presentTypes = [...new Set(located.map(a => a.activity_type))]
-  const hasAnyEnd    = located.some(a => a.end_lat && a.end_lng)
-  const hasAnyRoute  = located.some(a => (a.polyline?.length ?? 0) > 2)
-  const isCustom     = fetched.start !== defaultStart || fetched.end !== defaultEnd
+  const hasAnyRoute = located.some(a => (a.polyline?.length ?? 0) > 2)
+  const isCustom    = fetched.start !== defaultStart || fetched.end !== defaultEnd
+  const anySelected = selectedId !== null
+
+  // Render non-selected first, selected last (so it draws on top)
+  const sorted = selectedId == null
+    ? located
+    : [...located.filter(a => a.activity_id !== selectedId), located.find(a => a.activity_id === selectedId)!]
 
   return (
     <div className="bg-slate-800 rounded-xl p-4">
@@ -97,49 +220,28 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd }: Pr
         <div>
           <h3 className="text-sm font-semibold text-slate-300">Activity Map</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            {loading
-              ? 'Loading…'
-              : `${located.length} activities · dots = start${hasAnyEnd ? ' · rings = end' : ''}${hasAnyRoute ? ' · lines = route' : ''}`
-            }
+            {loading ? 'Loading…' : `${located.length} activities${hasAnyRoute ? ' · paths colored by speed' : ''}${anySelected ? ' · click map to deselect' : ''}`}
           </p>
         </div>
 
-        {/* Date pickers */}
         <div className="flex items-center gap-2 ml-auto flex-wrap">
           <div className="flex items-center gap-1.5">
             <label className="text-xs text-slate-400">From</label>
-            <input
-              type="date"
-              value={rangeStart}
-              onChange={e => setRangeStart(e.target.value)}
-              className="bg-slate-700 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-600 focus:outline-none focus:border-blue-500"
-            />
+            <input type="date" value={rangeStart} onChange={e => setRangeStart(e.target.value)}
+              className="bg-slate-700 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-600 focus:outline-none focus:border-blue-500" />
           </div>
           <div className="flex items-center gap-1.5">
             <label className="text-xs text-slate-400">To</label>
-            <input
-              type="date"
-              value={rangeEnd}
-              onChange={e => setRangeEnd(e.target.value)}
-              className="bg-slate-700 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-600 focus:outline-none focus:border-blue-500"
-            />
+            <input type="date" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)}
+              className="bg-slate-700 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-600 focus:outline-none focus:border-blue-500" />
           </div>
-          <button
-            onClick={apply}
-            disabled={!rangeStart || !rangeEnd || rangeStart > rangeEnd}
-            className="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
-          >
+          <button onClick={apply} disabled={!rangeStart || !rangeEnd || rangeStart > rangeEnd}
+            className="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors">
             Show
           </button>
           {isCustom && (
-            <button
-              onClick={() => {
-                setRangeStart(defaultStart)
-                setRangeEnd(defaultEnd)
-                setFetched({ start: defaultStart, end: defaultEnd })
-              }}
-              className="px-2 py-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
-            >
+            <button onClick={() => { setRangeStart(defaultStart); setRangeEnd(defaultEnd); setFetched({ start: defaultStart, end: defaultEnd }) }}
+              className="px-2 py-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors">
               Reset
             </button>
           )}
@@ -159,74 +261,49 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd }: Pr
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
             />
             {allPts.length > 0 && <AutoFit pts={allPts} />}
+            <DeselectOnMapClick onDeselect={() => setSelectedId(null)} />
 
-            {located.map(a => {
-              const clr      = color(a.activity_type)
-              const hasRoute = (a.polyline?.length ?? 0) > 2
+            {sorted.map(a => {
+              const isSelected = a.activity_id === selectedId
+              const isDimmed   = anySelected && !isSelected
+              const hasRoute   = (a.polyline?.length ?? 0) > 2
 
-              const popup = (
-                <Popup>
-                  <div style={{ fontSize: 13, minWidth: 180 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{a.name}</div>
-                    <div style={{ color: '#888', fontSize: 11, marginBottom: 6 }}>
-                      {new Date(a.start_time).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
-                      {' · '}{a.activity_type.replace(/_/g, ' ')}
-                    </div>
-                    <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-                      <tbody>
-                        {a.distance_meters != null && (
-                          <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Distance</td><td>{fmtDist(a.distance_meters)}</td></tr>
-                        )}
-                        <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Duration</td><td>{fmtDur(a.duration_seconds)}</td></tr>
-                        {a.avg_pace_sec_per_km != null && (
-                          <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Pace</td><td>{fmtPace(a.avg_pace_sec_per_km)}</td></tr>
-                        )}
-                        {fmtSpeed(a) && (
-                          <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Speed</td><td>{fmtSpeed(a)}</td></tr>
-                        )}
-                        {a.avg_hr != null && (
-                          <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Avg HR</td><td>{a.avg_hr} bpm</td></tr>
-                        )}
-                        {a.elevation_gain_m != null && (
-                          <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Elevation</td><td>+{Math.round(a.elevation_gain_m)} m</td></tr>
-                        )}
-                        {a.calories != null && (
-                          <tr><td style={{ color: '#aaa', paddingRight: 8 }}>Calories</td><td>{a.calories} kcal</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </Popup>
-              )
+              const endLat = a.end_lat ?? (hasRoute ? a.polyline![a.polyline!.length - 1][0] : null)
+              const endLng = a.end_lng ?? (hasRoute ? a.polyline![a.polyline!.length - 1][1] : null)
+
+              const routeWeight  = isSelected ? 5 : 3
+              const routeOpacity = isDimmed ? 0.15 : 0.9
+              const pinOpacity   = isDimmed ? 0.25 : 1
+
+              const popup = <ActivityPopup a={a} />
+              const selectHandler = { click: (e: L.LeafletMouseEvent) => { L.DomEvent.stopPropagation(e); setSelectedId(a.activity_id) } }
 
               return (
                 <Fragment key={a.activity_id}>
-                  {/* Full GPS route */}
                   {hasRoute && (
-                    <Polyline
-                      positions={a.polyline as [number, number][]}
-                      pathOptions={{ color: clr, weight: 3, opacity: 0.85 }}
-                    >
-                      {popup}
-                    </Polyline>
+                    <SpeedPolyline points={a.polyline!} popup={popup} weight={routeWeight} opacity={routeOpacity} />
                   )}
 
-                  {/* Start marker — filled circle */}
-                  <CircleMarker
-                    center={[a.start_lat!, a.start_lng!]}
-                    radius={hasRoute ? 5 : 6}
-                    pathOptions={{ color: clr, fillColor: clr, fillOpacity: 0.9, weight: 1.5 }}
+                  {/* Start pin */}
+                  <Marker
+                    position={[a.start_lat!, a.start_lng!]}
+                    icon={START_ICON}
+                    opacity={pinOpacity}
+                    eventHandlers={selectHandler}
                   >
-                    {!hasRoute && popup}
-                  </CircleMarker>
+                    {popup}
+                  </Marker>
 
-                  {/* End marker — hollow ring (same color, no fill) */}
-                  {a.end_lat != null && a.end_lng != null && (
-                    <CircleMarker
-                      center={[a.end_lat, a.end_lng]}
-                      radius={hasRoute ? 5 : 6}
-                      pathOptions={{ color: clr, fillColor: '#1e293b', fillOpacity: 0.9, weight: 2.5 }}
-                    />
+                  {/* End pin */}
+                  {endLat != null && endLng != null && (
+                    <Marker
+                      position={[endLat, endLng]}
+                      icon={END_ICON}
+                      opacity={pinOpacity}
+                      eventHandlers={selectHandler}
+                    >
+                      {popup}
+                    </Marker>
                   )}
                 </Fragment>
               )
@@ -236,24 +313,29 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd }: Pr
       )}
 
       {/* Legend */}
-      <div className="flex flex-wrap items-center gap-4 mt-3">
-        {presentTypes.map(type => (
-          <div key={type} className="flex items-center gap-1.5">
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color(type) }} />
-            <span className="text-xs text-slate-400">{type.replace(/_/g, ' ')}</span>
+      {located.length > 0 && (
+        <div className="flex flex-wrap items-center gap-4 mt-3">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-3.5 bg-green-600" style={{ clipPath: 'polygon(50% 100%, 0 40%, 20% 0, 80% 0, 100% 40%)' }} />
+            <span className="text-xs text-slate-400">start</span>
           </div>
-        ))}
-        {located.length > 0 && (
-          <div className="flex items-center gap-3 ml-auto text-xs text-slate-500">
-            <span className="flex items-center gap-1">
-              <span className="inline-block w-2.5 h-2.5 rounded-full bg-slate-400" /> start
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-slate-400" /> end
-            </span>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-3.5 bg-red-600" style={{ clipPath: 'polygon(50% 100%, 0 40%, 20% 0, 80% 0, 100% 40%)' }} />
+            <span className="text-xs text-slate-400">end</span>
           </div>
-        )}
-      </div>
+          {hasAnyRoute && (
+            <div className="flex items-center gap-2 ml-2">
+              <span className="text-xs text-slate-500">slow</span>
+              <div className="flex h-2 w-24 rounded overflow-hidden">
+                {Array.from({ length: 8 }, (_, i) => (
+                  <div key={i} className="flex-1" style={{ backgroundColor: speedColor(i / 7) }} />
+                ))}
+              </div>
+              <span className="text-xs text-slate-500">fast</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
