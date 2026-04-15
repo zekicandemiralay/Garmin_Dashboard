@@ -244,7 +244,7 @@ export default function App() {
                 <ActivityMap start={start} end={end} />
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <ActivityPaceChart data={activities} />
-                  <PersonalBestsTable data={activities} />
+                  <PersonalBestsTable activities={activities} daily={daily} />
                 </div>
                 <TrainingLoadChart data={activities} />
                 {activities.length > 0 && dataRange.earliest && (
