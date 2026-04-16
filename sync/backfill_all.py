@@ -1,5 +1,5 @@
 """
-Full backfill: fix all missing coordinates then all missing polylines.
+Full backfill: sync missing historical data, fix missing coords, fetch missing polylines.
 Run once to catch up immediately without waiting for hourly cycles.
 
   docker-compose exec sync python backfill_all.py
@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from dotenv import load_dotenv
 import db
 import sync as sync_module
-from sync import extract_polyline, fetch_activities, OUTDOOR_TYPES, ensure_schema
+from sync import extract_polyline, fetch_activities, OUTDOOR_TYPES, ensure_schema, sync_range
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -23,6 +23,28 @@ log.info("Logged in.")
 conn = db.get_conn()
 ensure_schema()
 conn.close()
+
+# ── Phase 0: sync all missing historical data ──────────────────────────────────
+log.info("=== Phase 0: checking for missing historical data ===")
+conn = db.get_conn()
+with conn.cursor() as cur:
+    cur.execute("SELECT MIN(date) FROM daily_summary WHERE steps IS NOT NULL")
+    row = cur.fetchone()
+conn.close()
+
+today = date.today()
+backfill_start = today - timedelta(days=3650)
+earliest_in_db = row[0] if row and row[0] else None
+
+if earliest_in_db is None:
+    log.info("Phase 0: DB empty — nothing to backfill historically.")
+elif earliest_in_db > backfill_start + timedelta(days=1):
+    hist_end = earliest_in_db - timedelta(days=1)
+    log.info(f"Phase 0: DB starts at {earliest_in_db}, syncing {backfill_start} → {hist_end} ...")
+    sync_range(backfill_start, hist_end)
+    log.info("Phase 0 done.")
+else:
+    log.info(f"Phase 0 done — no historical gap (DB goes back to {earliest_in_db}).")
 
 # ── Phase 1: fix all missing start coordinates ─────────────────────────────────
 log.info("=== Phase 1: filling missing GPS coordinates ===")

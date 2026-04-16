@@ -396,6 +396,32 @@ def get_latest_synced_date() -> date | None:
         return None
 
 
+def get_earliest_synced_date() -> date | None:
+    """Return the earliest date that has real data in the DB, or None if DB is empty."""
+    try:
+        conn = db.get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT MIN(date) FROM daily_summary WHERE steps IS NOT NULL")
+            row = cur.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def sync_historical_gap():
+    """If there is a gap between BACKFILL_DAYS ago and the earliest data in DB,
+    fill in one 30-day chunk going backwards. Called each sync cycle."""
+    backfill_start = date.today() - timedelta(days=BACKFILL_DAYS)
+    earliest = get_earliest_synced_date()
+    if earliest is None or earliest <= backfill_start + timedelta(days=1):
+        return
+    chunk_end = earliest - timedelta(days=1)
+    chunk_start = max(backfill_start, chunk_end - timedelta(days=29))
+    log.info(f"History gap: backfilling {chunk_start} → {chunk_end} ...")
+    sync_range(chunk_start, chunk_end)
+
+
 def main():
     login()
     ensure_schema()
@@ -413,6 +439,7 @@ def main():
             log.info(f"Incremental sync from {start} (DB latest: {latest}).")
 
         sync_range(start, today)
+        sync_historical_gap()       # fill one 30-day chunk of history before earliest DB date
         conn = db.get_conn()
         sync_missing_coords(conn)   # re-fetch metadata for activities missing start_lat
         sync_missing_gps(conn)      # fetch polylines for activities that have start_lat but no route
