@@ -100,9 +100,9 @@ with conn.cursor() as cur:
 stored = 0
 for aid in ids:
     try:
-        details = client.get_activity_details(aid, maxpollen=1000)
+        details = client.get_activity_details(aid, maxpoly=4000)
         polyline = extract_polyline(details)
-        db.upsert_activity_gps(conn, aid, polyline or [])
+        db.upsert_activity_gps(conn, aid, polyline)
         if polyline:
             stored += 1
         time.sleep(0.4)
