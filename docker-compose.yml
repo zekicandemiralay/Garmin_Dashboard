@@ -14,6 +14,11 @@ services:
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   sync:
     build: ./sync
@@ -21,10 +26,10 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      SYNC_BACKFILL_DAYS: 3650   # ~10 years — pulls all available Garmin history on first run
-      GPS_BATCH_SIZE: 50         # polylines fetched per sync cycle — raise to 200 for faster catch-up
+      GPS_BATCH_SIZE: 50   # polylines fetched per sync cycle — raise to 200 for faster catch-up
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
       - ./garth_tokens:/root/.garth  # pre-generated tokens from garmin_login.py (no password needed)
 
@@ -34,7 +39,8 @@ services:
     restart: unless-stopped
     env_file: .env
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     ports:
       - "8000:8000"
 
