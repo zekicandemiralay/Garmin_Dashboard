@@ -29,6 +29,7 @@ log.info("=== Phase 1: filling missing GPS coordinates ===")
 placeholders = ','.join(['%s'] * len(OUTDOOR_TYPES))
 CHUNK = 30
 
+prev_remaining = None
 while True:
     conn = db.get_conn()
     with conn.cursor() as cur:
@@ -46,6 +47,13 @@ while True:
         break
 
     oldest, remaining = row[0], row[1]
+
+    if remaining == prev_remaining:
+        log.warning(f"  No progress — {remaining} activities still have no GPS after re-fetch. "
+                    "They likely have no GPS track in Garmin. Moving on.")
+        break
+    prev_remaining = remaining
+
     chunk_end = min(oldest + timedelta(days=CHUNK - 1), date.today())
     log.info(f"Re-fetching {oldest} → {chunk_end}  ({remaining} still missing) ...")
 
