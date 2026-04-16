@@ -266,6 +266,35 @@ def sync_missing_gps(conn, max_fetch: int = GPS_BATCH_SIZE):
     log.info(f"GPS: stored {stored}/{len(ids)} polylines — {remaining_after} still pending")
 
 
+def sync_missing_coords(conn, chunk_days: int = 30):
+    """Re-fetch activity metadata for the oldest chunk that has outdoor activities missing GPS coords.
+
+    Called each sync cycle — works through history one 30-day chunk at a time until
+    every outdoor activity has start_lat populated.
+    """
+    placeholders = ','.join(['%s'] * len(OUTDOOR_TYPES))
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT MIN(start_time::date), COUNT(*)
+            FROM activities
+            WHERE start_lat IS NULL
+              AND activity_type IN ({placeholders})
+        """, OUTDOOR_TYPES)
+        row = cur.fetchone()
+
+    if not row or not row[0]:
+        return  # nothing missing
+
+    oldest_missing, total_missing = row[0], row[1]
+    chunk_end = min(oldest_missing + timedelta(days=chunk_days - 1), date.today())
+    log.info(f"Coords: {total_missing} outdoor activities missing coordinates — re-fetching {oldest_missing} → {chunk_end} ...")
+
+    activity_rows = fetch_activities(oldest_missing, chunk_end)
+    if activity_rows:
+        db.upsert_activities(conn, activity_rows)
+        log.info(f"Coords: re-synced {len(activity_rows)} activities in chunk")
+
+
 # ─── Sync loop ─────────────────────────────────────────────────────────────────
 
 CHUNK_DAYS = 30   # save to DB every N days during backfill
@@ -385,7 +414,8 @@ def main():
 
         sync_range(start, today)
         conn = db.get_conn()
-        sync_missing_gps(conn)
+        sync_missing_coords(conn)   # re-fetch metadata for activities missing start_lat
+        sync_missing_gps(conn)      # fetch polylines for activities that have start_lat but no route
         conn.close()
         log.info(f"Sleeping {INTERVAL}s until next sync...")
         time.sleep(INTERVAL)
