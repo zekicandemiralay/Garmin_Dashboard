@@ -22,6 +22,7 @@ services:
     env_file: .env
     environment:
       SYNC_BACKFILL_DAYS: 3650   # ~10 years — pulls all available Garmin history on first run
+      GPS_BATCH_SIZE: 50         # polylines fetched per sync cycle — raise to 200 for faster catch-up
     depends_on:
       - db
     volumes:

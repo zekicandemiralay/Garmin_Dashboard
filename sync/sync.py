@@ -29,6 +29,7 @@ GARMIN_EMAIL    = os.getenv("GARMIN_EMAIL")
 GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD")
 BACKFILL_DAYS   = int(os.getenv("SYNC_BACKFILL_DAYS", 3650))
 INTERVAL        = int(os.getenv("SYNC_INTERVAL_SECONDS", 3600))
+GPS_BATCH_SIZE  = int(os.getenv("GPS_BATCH_SIZE", 50))   # polylines fetched per sync cycle
 TOKEN_DIR       = str(Path("/root/.garth").resolve())
 
 client: Garmin = None
@@ -211,19 +212,26 @@ def extract_polyline(details: dict) -> list | None:
     return points if len(points) >= 3 else None
 
 
-def sync_missing_gps(conn, max_fetch: int = 15):
+def sync_missing_gps(conn, max_fetch: int = GPS_BATCH_SIZE):
     """Fetch GPS polylines for the most recent activities that don't have one yet."""
     with conn.cursor() as cur:
         cur.execute("""
+            SELECT COUNT(*) FROM activities
+            WHERE (polyline IS NULL OR polyline = '[]') AND start_lat IS NOT NULL
+        """)
+        total_pending = cur.fetchone()[0]
+        cur.execute("""
             SELECT activity_id FROM activities
-            WHERE polyline IS NULL AND start_lat IS NOT NULL
+            WHERE (polyline IS NULL OR polyline = '[]') AND start_lat IS NOT NULL
             ORDER BY start_time DESC
             LIMIT %s
         """, (max_fetch,))
         ids = [r[0] for r in cur.fetchall()]
     if not ids:
+        log.info("GPS: all polylines up to date.")
         return
-    log.info(f"GPS: fetching polylines for {len(ids)} activities ...")
+    remaining_after = max(0, total_pending - len(ids))
+    log.info(f"GPS: fetching {len(ids)} polylines ({remaining_after} still pending after this batch) ...")
     stored = 0
     for aid in ids:
         try:
@@ -235,7 +243,7 @@ def sync_missing_gps(conn, max_fetch: int = 15):
             time.sleep(0.5)
         except Exception as e:
             log.warning(f"GPS fetch failed for {aid}: {e}")
-    log.info(f"GPS: stored {stored}/{len(ids)} polylines")
+    log.info(f"GPS: stored {stored}/{len(ids)} polylines — {remaining_after} still pending")
 
 
 # ─── Sync loop ─────────────────────────────────────────────────────────────────
