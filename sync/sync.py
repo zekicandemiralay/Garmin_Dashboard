@@ -212,23 +212,42 @@ def extract_polyline(details: dict) -> list | None:
     return points if len(points) >= 3 else None
 
 
+# Activity types that can have GPS routes — only these are worth retrying
+OUTDOOR_TYPES = (
+    'RUNNING', 'TRAIL_RUNNING', 'CYCLING', 'MOUNTAIN_BIKING', 'VIRTUAL_RIDE',
+    'HIKING', 'WALKING', 'SWIMMING', 'OPEN_WATER_SWIMMING', 'MULTISPORT',
+    'TRIATHLON', 'RESORT_SKIING_SNOWBOARDING', 'BACKCOUNTRY_SKIING',
+    'STAND_UP_PADDLEBOARDING', 'ROWING', 'OTHER',
+)
+
+
 def sync_missing_gps(conn, max_fetch: int = GPS_BATCH_SIZE):
-    """Fetch GPS polylines for the most recent activities that don't have one yet."""
+    """Fetch GPS polylines for outdoor activities that don't have one yet.
+
+    Stores NULL (not []) when no track is found so the activity is retried
+    next cycle — handles transient Garmin API failures automatically.
+    Only processes outdoor activity types to avoid retrying gym/indoor sessions.
+    """
+    placeholders = ','.join(['%s'] * len(OUTDOOR_TYPES))
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT COUNT(*) FROM activities
-            WHERE (polyline IS NULL OR polyline = '[]') AND start_lat IS NOT NULL
-        """)
+            WHERE polyline IS NULL
+              AND start_lat IS NOT NULL
+              AND activity_type IN ({placeholders})
+        """, OUTDOOR_TYPES)
         total_pending = cur.fetchone()[0]
-        cur.execute("""
+        cur.execute(f"""
             SELECT activity_id FROM activities
-            WHERE (polyline IS NULL OR polyline = '[]') AND start_lat IS NOT NULL
+            WHERE polyline IS NULL
+              AND start_lat IS NOT NULL
+              AND activity_type IN ({placeholders})
             ORDER BY start_time DESC
             LIMIT %s
-        """, (max_fetch,))
+        """, (*OUTDOOR_TYPES, max_fetch))
         ids = [r[0] for r in cur.fetchall()]
     if not ids:
-        log.info("GPS: all polylines up to date.")
+        log.info("GPS: all outdoor polylines up to date.")
         return
     remaining_after = max(0, total_pending - len(ids))
     log.info(f"GPS: fetching {len(ids)} polylines ({remaining_after} still pending after this batch) ...")
@@ -237,7 +256,8 @@ def sync_missing_gps(conn, max_fetch: int = GPS_BATCH_SIZE):
         try:
             details = client.get_activity_details(aid, maxpoly=4000)
             polyline = extract_polyline(details)
-            db.upsert_activity_gps(conn, aid, polyline or [])
+            # Store NULL if no track found — will be retried next cycle
+            db.upsert_activity_gps(conn, aid, polyline)
             if polyline:
                 stored += 1
             time.sleep(0.5)

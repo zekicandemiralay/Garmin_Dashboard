@@ -151,10 +151,11 @@ def upsert_activities(conn, rows: list[dict]):
     conn.commit()
 
 
-def upsert_activity_gps(conn, activity_id: int, polyline: list):
+def upsert_activity_gps(conn, activity_id: int, polyline: list | None):
+    """Store polyline. Pass None to keep as NULL so the activity is retried next cycle."""
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE activities SET polyline = %s WHERE activity_id = %s",
-            (json.dumps(polyline), activity_id),
+            (json.dumps(polyline) if polyline else None, activity_id),
         )
     conn.commit()

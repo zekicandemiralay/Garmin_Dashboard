@@ -62,7 +62,7 @@ for i, aid in enumerate(ids):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE activities SET polyline = %s WHERE activity_id = %s",
-                (json.dumps(polyline if polyline else []), aid),
+                (json.dumps(polyline) if polyline else None, aid),
             )
         conn.commit()
         conn.close()
