@@ -4,7 +4,7 @@ Run once to catch up immediately without waiting for hourly cycles.
 
   docker-compose exec sync python backfill_all.py
 """
-import time, json, logging
+import os, time, json, logging
 from datetime import date, timedelta
 from dotenv import load_dotenv
 import db
@@ -33,7 +33,7 @@ with conn.cursor() as cur:
 conn.close()
 
 today = date.today()
-backfill_start = today - timedelta(days=3650)
+backfill_start = today - timedelta(days=int(os.getenv("SYNC_BACKFILL_DAYS", 3650)))
 earliest_in_db = row[0] if row and row[0] else None
 
 if earliest_in_db is None:

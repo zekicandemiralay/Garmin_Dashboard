@@ -248,7 +248,7 @@ def sync_missing_gps(conn, max_fetch: int = GPS_BATCH_SIZE):
         ids = [r[0] for r in cur.fetchall()]
     if not ids:
         log.info("GPS: all outdoor polylines up to date.")
-        return
+        return 0
     remaining_after = max(0, total_pending - len(ids))
     log.info(f"GPS: fetching {len(ids)} polylines ({remaining_after} still pending after this batch) ...")
     stored = 0
@@ -264,6 +264,7 @@ def sync_missing_gps(conn, max_fetch: int = GPS_BATCH_SIZE):
         except Exception as e:
             log.warning(f"GPS fetch failed for {aid}: {e}")
     log.info(f"GPS: stored {stored}/{len(ids)} polylines — {remaining_after} still pending")
+    return remaining_after
 
 
 def sync_missing_coords(conn, chunk_days: int = 30):
@@ -442,7 +443,13 @@ def main():
         sync_historical_gap()       # fill one 30-day chunk of history before earliest DB date
         conn = db.get_conn()
         sync_missing_coords(conn)   # re-fetch metadata for activities missing start_lat
-        sync_missing_gps(conn)      # fetch polylines for activities that have start_lat but no route
+        # Drain all pending polylines before sleeping — ensures first install completes fully
+        while True:
+            conn.close()
+            conn = db.get_conn()
+            remaining = sync_missing_gps(conn)
+            if remaining == 0:
+                break
         conn.close()
         log.info(f"Sleeping {INTERVAL}s until next sync...")
         time.sleep(INTERVAL)
