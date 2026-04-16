@@ -4,25 +4,20 @@ Run once to catch up immediately without waiting for hourly cycles.
 
   docker-compose exec sync python backfill_all.py
 """
-import os, time, json, logging
+import time, json, logging
 from datetime import date, timedelta
-from pathlib import Path
 from dotenv import load_dotenv
-from garminconnect import Garmin
 import db
-from sync import (
-    extract_polyline, fetch_activities,
-    OUTDOOR_TYPES, ensure_schema,
-    TOKEN_DIR, GARMIN_EMAIL, GARMIN_PASSWORD,
-)
+import sync as sync_module
+from sync import extract_polyline, fetch_activities, OUTDOOR_TYPES, ensure_schema
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-# ── Login ──────────────────────────────────────────────────────────────────────
-client = Garmin(email=GARMIN_EMAIL, password=GARMIN_PASSWORD)
-client.login(tokenstore=TOKEN_DIR)
+# ── Login — sets sync.client used by fetch_activities/extract_polyline ─────────
+sync_module.login()
+client = sync_module.client
 log.info("Logged in.")
 
 conn = db.get_conn()
