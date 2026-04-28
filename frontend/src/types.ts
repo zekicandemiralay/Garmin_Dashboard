@@ -87,6 +87,24 @@ export interface MapActivity {
   polyline: number[][] | null  // each point: [lat, lng] or [lat, lng, speed_mps]
 }
 
+export interface CountryTypeStat {
+  type: string
+  count: number
+  total_km: number
+  total_hours: number
+  total_elevation_m: number
+  avg_hr: number | null
+}
+
+export interface CountryStat {
+  country: string   // ISO 3166-1 alpha-2 code, e.g. "AT"
+  total_activities: number
+  total_km: number
+  total_hours: number
+  total_elevation_m: number
+  types: CountryTypeStat[]
+}
+
 export interface Summary {
   period_7d: {
     daily: {

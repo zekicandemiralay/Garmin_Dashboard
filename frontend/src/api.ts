@@ -1,4 +1,4 @@
-import type { DailyRow, SleepRow, HrvRow, Activity, MapActivity, Summary, DataRange } from './types'
+import type { DailyRow, SleepRow, HrvRow, Activity, MapActivity, Summary, DataRange, CountryStat } from './types'
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path)
@@ -32,4 +32,8 @@ export function fetchRange(): Promise<DataRange> {
 
 export function fetchMapActivities(start: string, end: string): Promise<MapActivity[]> {
   return get(`/api/activities/map?start=${start}&end=${end}`)
+}
+
+export function fetchCountryStats(start: string, end: string): Promise<CountryStat[]> {
+  return get(`/api/activities/countries?start=${start}&end=${end}`)
 }

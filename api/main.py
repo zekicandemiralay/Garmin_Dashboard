@@ -204,6 +204,57 @@ def get_activities(
         return cur.fetchall()
 
 
+# ─── Country statistics ───────────────────────────────────────────────────────
+
+@app.get("/api/activities/countries")
+def get_country_stats(
+    start: Optional[date] = Query(default=None),
+    end:   Optional[date] = Query(default=None),
+):
+    """Activity statistics grouped by country (ISO2) and type, sorted by total distance."""
+    if start is None or end is None:
+        start = date(2000, 1, 1)
+        end   = date.today()
+    with db.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                country,
+                activity_type,
+                COUNT(*)                                                    AS count,
+                ROUND((COALESCE(SUM(distance_meters), 0) / 1000.0)::numeric, 1)::float  AS total_km,
+                ROUND((COALESCE(SUM(duration_seconds), 0) / 3600.0)::numeric, 1)::float AS total_hours,
+                ROUND(COALESCE(SUM(elevation_gain_m), 0)::numeric)::int                 AS total_elevation_m,
+                ROUND(AVG(avg_hr)::numeric)::int                            AS avg_hr
+            FROM activities
+            WHERE start_time::date BETWEEN %s AND %s
+              AND country IS NOT NULL
+            GROUP BY country, activity_type
+            ORDER BY country, total_km DESC NULLS LAST
+            """,
+            (start, end),
+        )
+        rows = cur.fetchall()
+
+    countries: dict = {}
+    for row in rows:
+        c = row["country"]
+        if c not in countries:
+            countries[c] = {"country": c, "total_activities": 0, "total_km": 0.0,
+                            "total_hours": 0.0, "total_elevation_m": 0, "types": []}
+        countries[c]["types"].append({
+            "type": row["activity_type"], "count": row["count"],
+            "total_km": row["total_km"], "total_hours": row["total_hours"],
+            "total_elevation_m": row["total_elevation_m"], "avg_hr": row["avg_hr"],
+        })
+        countries[c]["total_activities"] += row["count"]
+        countries[c]["total_km"]         = round(countries[c]["total_km"] + (row["total_km"] or 0), 1)
+        countries[c]["total_hours"]      = round(countries[c]["total_hours"] + (row["total_hours"] or 0), 1)
+        countries[c]["total_elevation_m"] += row["total_elevation_m"] or 0
+
+    return sorted(countries.values(), key=lambda x: x["total_km"], reverse=True)
+
+
 # ─── Summary (overview card for dashboard) ───────────────────────────────────
 
 @app.get("/api/summary")

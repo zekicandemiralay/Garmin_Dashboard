@@ -24,6 +24,7 @@ import ActivitiesTable from './components/ActivitiesTable'
 import ActivityMap from './components/ActivityMap'
 import ActivityPaceChart from './components/ActivityPaceChart'
 import PersonalBestsTable from './components/PersonalBestsTable'
+import CountryStats from './components/CountryStats'
 
 // ─── Range ────────────────────────────────────────────────────────────────────
 
@@ -262,6 +263,7 @@ export default function App() {
                     onSelectActivity={id => { setMapHighlightId(id); setTab('Activity'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
                   />
                 </div>
+                <CountryStats start={start} end={end} />
                 <TrainingLoadChart data={activities} />
                 {activities.length > 0 && dataRange.earliest && (
                   <ActivityHeatmap

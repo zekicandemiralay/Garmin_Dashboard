@@ -16,6 +16,12 @@ from garminconnect import Garmin
 
 import db
 
+try:
+    import reverse_geocoder as rg
+    HAS_GEOCODER = True
+except ImportError:
+    HAS_GEOCODER = False
+
 load_dotenv()
 
 logging.basicConfig(
@@ -369,7 +375,8 @@ def ensure_schema():
                 ADD COLUMN IF NOT EXISTS avg_speed_mps    FLOAT,
                 ADD COLUMN IF NOT EXISTS avg_cadence      INTEGER,
                 ADD COLUMN IF NOT EXISTS avg_power        INTEGER,
-                ADD COLUMN IF NOT EXISTS polyline         JSONB;
+                ADD COLUMN IF NOT EXISTS polyline         JSONB,
+                ADD COLUMN IF NOT EXISTS country          VARCHAR(10);
             ALTER TABLE daily_summary
                 ADD COLUMN IF NOT EXISTS min_hr_day INTEGER,
                 ADD COLUMN IF NOT EXISTS max_hr_day INTEGER
@@ -423,6 +430,29 @@ def sync_historical_gap():
     sync_range(chunk_start, chunk_end)
 
 
+def populate_missing_countries(conn):
+    """Reverse geocode activities that have coordinates but no country code (offline, no API key)."""
+    if not HAS_GEOCODER:
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT activity_id, start_lat, start_lng FROM activities
+            WHERE start_lat IS NOT NULL AND country IS NULL
+            LIMIT 500
+        """)
+        rows = cur.fetchall()
+    if not rows:
+        return
+    coords = [(r[1], r[2]) for r in rows]
+    results = rg.search(coords, mode=1)
+    updates = [(res.get('cc', '??'), row[0]) for row, res in zip(rows, results)]
+    with conn.cursor() as cur:
+        for country_code, activity_id in updates:
+            cur.execute("UPDATE activities SET country = %s WHERE activity_id = %s", (country_code, activity_id))
+    conn.commit()
+    log.info(f"Countries: tagged {len(updates)} activities")
+
+
 def main():
     login()
     ensure_schema()
@@ -450,6 +480,7 @@ def main():
             remaining = sync_missing_gps(conn)
             if remaining == 0:
                 break
+        populate_missing_countries(conn)  # tag activities with ISO2 country code
         conn.close()
         log.info(f"Sleeping {INTERVAL}s until next sync...")
         time.sleep(INTERVAL)

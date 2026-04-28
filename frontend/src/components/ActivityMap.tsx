@@ -93,6 +93,10 @@ function SpeedPolyline({
   )
 }
 
+function fmtType(t: string) {
+  return t.split('_').map(w => w[0] + w.slice(1).toLowerCase()).join(' ')
+}
+
 function fmtDur(s: number | null) {
   if (!s) return '—'
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60)
@@ -169,6 +173,7 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
   const [data,       setData]       = useState<MapActivity[]>([])
   const [loading,    setLoading]    = useState(true)
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [typeFilter, setTypeFilter] = useState<string>('All')
 
   useEffect(() => {
     setRangeStart(defaultStart)
@@ -184,7 +189,7 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
   useEffect(() => {
     setLoading(true)
     fetchMapActivities(fetched.start, fetched.end)
-      .then(d => { setData(d); setSelectedId(null) })
+      .then(d => { setData(d); setSelectedId(null); setTypeFilter('All') })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [fetched.start, fetched.end])
@@ -198,20 +203,23 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
 
   const located = data.filter(a => a.start_lat != null && a.start_lng != null)
 
-  const allPts: [number, number][] = located.flatMap(a => {
+  const availableTypes = ['All', ...Array.from(new Set(data.map(a => a.activity_type))).sort()]
+  const visible = typeFilter === 'All' ? located : located.filter(a => a.activity_type === typeFilter)
+
+  const allPts: [number, number][] = visible.flatMap(a => {
     const pts: [number, number][] = [[a.start_lat!, a.start_lng!]]
     if (a.polyline?.length) a.polyline.forEach(p => pts.push([p[0], p[1]]))
     return pts
   })
 
-  const hasAnyRoute = located.some(a => (a.polyline?.length ?? 0) > 2)
+  const hasAnyRoute = visible.some(a => (a.polyline?.length ?? 0) > 2)
   const isCustom    = fetched.start !== defaultStart || fetched.end !== defaultEnd
   const anySelected = selectedId !== null
 
   // Render non-selected first, selected last (so it draws on top)
   const sorted = selectedId == null
-    ? located
-    : [...located.filter(a => a.activity_id !== selectedId), located.find(a => a.activity_id === selectedId)!]
+    ? visible
+    : [...visible.filter(a => a.activity_id !== selectedId), visible.find(a => a.activity_id === selectedId)!]
 
   return (
     <div className="bg-slate-800 rounded-xl p-4">
@@ -220,11 +228,22 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
         <div>
           <h3 className="text-sm font-semibold text-slate-300">Activity Map</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            {loading ? 'Loading…' : `${located.length} activities${hasAnyRoute ? ' · paths colored by speed' : ''}${anySelected ? ' · click map to deselect' : ''}`}
+            {loading ? 'Loading…' : `${visible.length} activities${typeFilter !== 'All' ? ` (${fmtType(typeFilter)})` : ''}${hasAnyRoute ? ' · paths colored by speed' : ''}${anySelected ? ' · click map to deselect' : ''}`}
           </p>
         </div>
 
         <div className="flex items-center gap-2 ml-auto flex-wrap">
+          {availableTypes.length > 2 && (
+            <select
+              value={typeFilter}
+              onChange={e => { setTypeFilter(e.target.value); setSelectedId(null) }}
+              className="bg-slate-700 text-slate-200 text-xs rounded-md px-2 py-1.5 border border-slate-600 focus:outline-none focus:border-blue-500"
+            >
+              {availableTypes.map(t => (
+                <option key={t} value={t}>{t === 'All' ? 'All types' : fmtType(t)}</option>
+              ))}
+            </select>
+          )}
           <div className="flex items-center gap-1.5">
             <label className="text-xs text-slate-400">From</label>
             <input type="date" value={rangeStart} onChange={e => setRangeStart(e.target.value)}
