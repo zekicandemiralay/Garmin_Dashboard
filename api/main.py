@@ -6,10 +6,11 @@ All date range params default to the last 30 days.
 """
 
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 import db
 
@@ -365,3 +366,112 @@ def get_summary():
         },
         "activities_30d": activities_30d["count"],
     }
+
+
+# ─── Tours ────────────────────────────────────────────────────────────────────
+
+class TourCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    activity_ids: List[int]
+
+
+class TourUpdate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+@app.get("/api/tours")
+def list_tours():
+    """All saved tours with summary stats."""
+    with db.cursor() as cur:
+        cur.execute(
+            """
+            SELECT t.id, t.name, t.description, t.created_at,
+                   COUNT(ta.activity_id)::int AS activity_count,
+                   ROUND((COALESCE(SUM(a.distance_meters), 0) / 1000.0)::numeric, 1)::float AS total_km,
+                   MIN(a.start_time::date)::text AS start_date,
+                   MAX(a.start_time::date)::text AS end_date
+            FROM tours t
+            LEFT JOIN tour_activities ta ON ta.tour_id = t.id
+            LEFT JOIN activities a ON a.activity_id = ta.activity_id
+            GROUP BY t.id
+            ORDER BY t.created_at DESC
+            """
+        )
+        return cur.fetchall()
+
+
+@app.post("/api/tours", status_code=201)
+def create_tour(body: TourCreate):
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO tours (name, description) VALUES (%s, %s) RETURNING id",
+            (body.name, body.description),
+        )
+        tour_id = cur.fetchone()["id"]
+        for aid in body.activity_ids:
+            cur.execute(
+                "INSERT INTO tour_activities (tour_id, activity_id) VALUES (%s, %s)",
+                (tour_id, aid),
+            )
+    return {"id": tour_id}
+
+
+@app.get("/api/tours/{tour_id}")
+def get_tour(tour_id: int):
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, description, created_at FROM tours WHERE id = %s",
+            (tour_id,),
+        )
+        tour = cur.fetchone()
+        if not tour:
+            raise HTTPException(status_code=404, detail="Tour not found")
+
+        cur.execute(
+            """
+            SELECT a.activity_id, a.start_time, a.activity_type, a.name,
+                   a.duration_seconds, a.distance_meters, a.elevation_gain_m, a.avg_speed_mps,
+                   a.avg_hr, a.avg_pace_sec_per_km, a.calories,
+                   a.start_lat, a.start_lng, a.end_lat, a.end_lng,
+                   a.polyline, a.weather_data, a.country_crossings, a.country
+            FROM activities a
+            JOIN tour_activities ta ON ta.activity_id = a.activity_id
+            WHERE ta.tour_id = %s
+            ORDER BY a.start_time ASC
+            """,
+            (tour_id,),
+        )
+        activities = cur.fetchall()
+
+        if activities:
+            dates = [a["start_time"].date() for a in activities]
+            cur.execute(
+                """
+                SELECT date, start_time, end_time, duration_seconds, sleep_score, avg_spo2
+                FROM sleep WHERE date BETWEEN %s AND %s ORDER BY date ASC
+                """,
+                (min(dates), max(dates)),
+            )
+            sleep = cur.fetchall()
+        else:
+            sleep = []
+
+    return {"tour": tour, "activities": activities, "sleep": sleep}
+
+
+@app.put("/api/tours/{tour_id}")
+def update_tour(tour_id: int, body: TourUpdate):
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE tours SET name = %s, description = %s, updated_at = NOW() WHERE id = %s",
+            (body.name, body.description, tour_id),
+        )
+    return {"ok": True}
+
+
+@app.delete("/api/tours/{tour_id}", status_code=204)
+def delete_tour(tour_id: int):
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM tours WHERE id = %s", (tour_id,))

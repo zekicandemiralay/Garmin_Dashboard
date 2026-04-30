@@ -383,6 +383,20 @@ def ensure_schema():
                 ADD COLUMN IF NOT EXISTS min_hr_day INTEGER,
                 ADD COLUMN IF NOT EXISTS max_hr_day INTEGER
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tours (
+                id          SERIAL PRIMARY KEY,
+                name        TEXT NOT NULL,
+                description TEXT,
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS tour_activities (
+                tour_id     INT REFERENCES tours(id) ON DELETE CASCADE,
+                activity_id BIGINT,
+                PRIMARY KEY (tour_id, activity_id)
+            )
+        """)
     conn.commit()
     conn.close()
     log.info("Schema check done.")

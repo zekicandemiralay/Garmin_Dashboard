@@ -113,6 +113,9 @@ export interface TouringActivity {
   distance_meters: number | null
   elevation_gain_m: number | null
   avg_speed_mps: number | null
+  avg_hr: number | null
+  avg_pace_sec_per_km: number | null
+  calories: number | null
   start_lat: number
   start_lng: number
   end_lat: number | null
@@ -121,6 +124,23 @@ export interface TouringActivity {
   weather_data: WeatherHourly | null
   country_crossings: CountryCrossing[] | null
   country: string | null
+}
+
+export interface TourSummary {
+  id: number
+  name: string
+  description: string | null
+  created_at: string
+  activity_count: number
+  total_km: number
+  start_date: string | null
+  end_date: string | null
+}
+
+export interface TourDetail {
+  tour: { id: number; name: string; description: string | null; created_at: string }
+  activities: TouringActivity[]
+  sleep: TouringData['sleep']
 }
 
 export interface TouringData {

@@ -1,8 +1,15 @@
-import { useEffect, useState, useMemo, useRef, Fragment } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { MapContainer, TileLayer, Polyline, Marker, Popup, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { fetchTouringData } from '../api'
-import type { TouringActivity, TouringData, WeatherHourly, CountryCrossing } from '../types'
+import {
+  fetchTouringData, fetchActivities, fetchTours,
+  createTour as apiCreateTour, fetchTourDetail,
+  updateTour as apiUpdateTour, deleteTour as apiDeleteTour,
+} from '../api'
+import type { TouringActivity, TouringData, WeatherHourly, TourSummary, TourDetail } from '../types'
+import type { Activity } from '../types'
+import TrainingLoadChart from './TrainingLoadChart'
+import ActivityPaceChart from './ActivityPaceChart'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -20,6 +27,10 @@ function fmtKm(m: number | null) {
   return m >= 1000 ? `${(m / 1000).toFixed(0)} km` : `${Math.round(m)} m`
 }
 
+function fmtKmNum(km: number) {
+  return km >= 1 ? `${km.toFixed(0)} km` : `${(km * 1000).toFixed(0)} m`
+}
+
 function fmtDur(s: number | null) {
   if (!s) return '—'
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60)
@@ -30,6 +41,22 @@ function fmtDateTime(ms: number) {
   const d = new Date(ms)
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
     + '  ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+function fmtType(t: string) {
+  return t.split('_').map(w => w[0] + w.slice(1).toLowerCase()).join(' ')
+}
+
+function fmtTourDates(start: string | null, end: string | null): string {
+  if (!start) return ''
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+  const s = new Date(start + 'T12:00:00')
+  if (!end || end === start) return s.toLocaleDateString(undefined, { ...opts, year: 'numeric' })
+  const e = new Date(end + 'T12:00:00')
+  if (s.getFullYear() === e.getFullYear()) {
+    return `${s.toLocaleDateString(undefined, opts)} – ${e.toLocaleDateString(undefined, { ...opts, year: 'numeric' })}`
+  }
+  return `${s.toLocaleDateString(undefined, { ...opts, year: 'numeric' })} – ${e.toLocaleDateString(undefined, { ...opts, year: 'numeric' })}`
 }
 
 function weatherEmoji(code: number): string {
@@ -43,7 +70,7 @@ function weatherEmoji(code: number): string {
 }
 
 function windArrow(deg: number): string {
-  return ['↑','↗','→','↘','↓','↙','←','↖'][Math.round(deg / 45) % 8]
+  return ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'][Math.round(deg / 45) % 8]
 }
 
 function getHourIndex(wd: WeatherHourly, targetMs: number): number {
@@ -54,17 +81,26 @@ function getHourIndex(wd: WeatherHourly, targetMs: number): number {
   return idx >= 0 ? idx : hour
 }
 
-// ─── Map ──────────────────────────────────────────────────────────────────────
+const ACTIVITY_COLORS: Record<string, string> = {
+  CYCLING: '#3b82f6', TRAIL_RUNNING: '#f97316', RUNNING: '#eab308',
+  HIKING: '#22c55e', WALKING: '#14b8a6', MOUNTAIN_BIKING: '#a855f7',
+}
+function activityColor(type: string) { return ACTIVITY_COLORS[type] ?? '#94a3b8' }
 
-function AutoFit({ pts }: { pts: [number, number][] }) {
+const TYPE_EMOJI: Record<string, string> = {
+  CYCLING: '🚴', TRAIL_RUNNING: '🏃', RUNNING: '🏃', HIKING: '🥾',
+  WALKING: '🚶', MOUNTAIN_BIKING: '🚵',
+}
+function typeEmoji(type: string) { return TYPE_EMOJI[type] ?? '🏅' }
+
+// ─── Map helpers ──────────────────────────────────────────────────────────────
+
+function AutoFit({ pts, fitKey }: { pts: [number, number][]; fitKey: string }) {
   const map = useMap()
-  const fitted = useRef(false)
   useEffect(() => {
-    if (pts.length > 0 && !fitted.current) {
-      map.fitBounds(pts, { padding: [40, 40], maxZoom: 13 })
-      fitted.current = true
-    }
-  }, [pts.length])
+    if (pts.length > 0) map.fitBounds(pts, { padding: [40, 40], maxZoom: 13 })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitKey])
   return null
 }
 
@@ -85,12 +121,6 @@ function makeSleepIcon(score: number | null) {
   const html = `<div style="background:rgba(15,23,42,.9);border:1.5px solid ${color};border-radius:8px;padding:2px 6px;font-size:11px;color:${color};white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.4)">🌙${score ? ` ${score}` : ''}</div>`
   return L.divIcon({ html, className: '', iconSize: [48, 22], iconAnchor: [24, 11] })
 }
-
-const ACTIVITY_COLORS: Record<string, string> = {
-  CYCLING: '#3b82f6', TRAIL_RUNNING: '#f97316', RUNNING: '#eab308',
-  HIKING: '#22c55e', WALKING: '#14b8a6', MOUNTAIN_BIKING: '#a855f7',
-}
-function activityColor(type: string) { return ACTIVITY_COLORS[type] ?? '#94a3b8' }
 
 // ─── Position interpolation ───────────────────────────────────────────────────
 
@@ -114,12 +144,11 @@ function positionAtTime(activities: TouringActivity[], targetMs: number): [numbe
   return first ? [first[0], first[1]] : null
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+// ─── Weather sub-components ───────────────────────────────────────────────────
 
 function WeatherCard({ act }: { act: TouringActivity }) {
   const wd = act.weather_data
-  const date = new Date(act.start_time)
-  const label = date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  const label = new Date(act.start_time).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 
   if (!wd?.temperature_2m?.length) {
     return (
@@ -147,9 +176,7 @@ function WeatherCard({ act }: { act: TouringActivity }) {
       <div className="text-sm font-semibold text-slate-100">{maxT}° / {minT}°</div>
       {totalPrecip > 0.1 && <div className="text-xs text-blue-300 mt-0.5">💧 {totalPrecip.toFixed(1)} mm</div>}
       <div className="text-xs text-slate-400 mt-0.5">💨 {maxWind} km/h</div>
-      {act.country && (
-        <div className="text-xs text-slate-500 mt-1">{flagOf(act.country)} {nameOf(act.country)}</div>
-      )}
+      {act.country && <div className="text-xs text-slate-500 mt-1">{flagOf(act.country)} {nameOf(act.country)}</div>}
     </div>
   )
 }
@@ -164,7 +191,6 @@ function CurrentWeatherPanel({ act, timeMs }: { act: TouringActivity; timeMs: nu
   const windDir = wd.wind_direction_10m?.[idx]
   const code = wd.weather_code?.[idx] ?? 0
   const humidity = wd.relative_humidity_2m?.[idx]
-
   return (
     <div className="flex items-center gap-4 bg-slate-700/60 rounded-lg px-4 py-2 text-sm">
       <span className="text-xl">{weatherEmoji(code)}</span>
@@ -199,42 +225,41 @@ function CountrySummary({ activities }: { activities: TouringActivity[] }) {
   )
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// ─── Spinner ──────────────────────────────────────────────────────────────────
 
-interface Props { start: string; end: string }
+function Spinner() {
+  return (
+    <div className="flex items-center justify-center h-64">
+      <div className="w-8 h-8 border-2 border-slate-600 border-t-blue-400 rounded-full animate-spin" />
+    </div>
+  )
+}
 
-export default function TouringTab({ start, end }: Props) {
-  const [data, setData] = useState<TouringData | null>(null)
-  const [loading, setLoading] = useState(true)
+// ─── TourMapView ──────────────────────────────────────────────────────────────
+
+type SleepEntry = TouringData['sleep'][number]
+
+function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sleep: SleepEntry[] }) {
   const [sliderValue, setSliderValue] = useState(0)
 
-  useEffect(() => {
-    setLoading(true)
-    fetchTouringData(start, end)
-      .then(d => { setData(d); setSliderValue(0) })
-      .catch(() => setData(null))
-      .finally(() => setLoading(false))
-  }, [start, end])
-
-  const activities = data?.activities ?? []
-  const sleep = data?.sleep ?? []
+  const fitKey = useMemo(() => activities.map(a => a.activity_id).join(','), [activities])
 
   const { tourStartMs, tourEndMs, totalMinutes } = useMemo(() => {
     if (!activities.length) return { tourStartMs: 0, tourEndMs: 0, totalMinutes: 0 }
     const starts = activities.map(a => +new Date(a.start_time))
     const ends = activities.map(a => +new Date(a.start_time) + (a.duration_seconds || 0) * 1000)
-    const tourStartMs = Math.min(...starts)
-    const tourEndMs = Math.max(...ends)
-    return { tourStartMs, tourEndMs, totalMinutes: Math.ceil((tourEndMs - tourStartMs) / 60000) }
+    return {
+      tourStartMs: Math.min(...starts),
+      tourEndMs: Math.max(...ends),
+      totalMinutes: Math.ceil((Math.max(...ends) - Math.min(...starts)) / 60000),
+    }
   }, [activities])
 
   const currentMs = tourStartMs + sliderValue * 60000
-
   const currentPos = useMemo(
     () => totalMinutes > 0 ? positionAtTime(activities, currentMs) : null,
     [activities, currentMs, totalMinutes]
   )
-
   const currentAct = useMemo(
     () => activities.find(a => {
       const s = +new Date(a.start_time), e = s + (a.duration_seconds || 0) * 1000
@@ -242,12 +267,10 @@ export default function TouringTab({ start, end }: Props) {
     }),
     [activities, currentMs]
   )
-
   const allPts = useMemo<[number, number][]>(
     () => activities.flatMap(a => a.polyline?.map(p => [p[0], p[1]] as [number, number]) ?? []),
     [activities]
   )
-
   const sleepMarkers = useMemo(() => {
     return sleep.map(s => {
       const sleepDate = new Date(s.date).toDateString()
@@ -271,18 +294,6 @@ export default function TouringTab({ start, end }: Props) {
     duration: activities.reduce((s, a) => s + (a.duration_seconds ?? 0), 0),
     days: new Set(activities.map(a => a.start_time.slice(0, 10))).size,
   }), [activities])
-
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-8 h-8 border-2 border-slate-600 border-t-blue-400 rounded-full animate-spin" />
-    </div>
-  )
-
-  if (!activities.length) return (
-    <div className="bg-slate-800 rounded-xl p-8 text-center text-slate-500">
-      No activities with GPS routes in this period
-    </div>
-  )
 
   return (
     <div className="space-y-4">
@@ -310,13 +321,11 @@ export default function TouringTab({ start, end }: Props) {
               attribution='&copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)'
               maxZoom={17}
             />
-            {allPts.length > 0 && <AutoFit pts={allPts} />}
-
-            {/* Routes */}
+            {allPts.length > 0 && <AutoFit pts={allPts} fitKey={fitKey} />}
             {activities.map(a => (
               <Polyline
                 key={a.activity_id}
-                positions={a.polyline.map(p => [p[0], p[1]] as [number, number])}
+                positions={a.polyline?.map(p => [p[0], p[1]] as [number, number]) ?? []}
                 pathOptions={{ color: activityColor(a.activity_type), weight: 3, opacity: 0.85 }}
               >
                 <Popup>
@@ -329,15 +338,9 @@ export default function TouringTab({ start, end }: Props) {
                 </Popup>
               </Polyline>
             ))}
-
-            {/* Country crossings */}
             {activities.flatMap(a =>
               (a.country_crossings ?? []).map((c, i) => (
-                <Marker
-                  key={`${a.activity_id}-cross-${i}`}
-                  position={[c.lat, c.lng]}
-                  icon={makeFlagIcon(c.from, c.to)}
-                >
+                <Marker key={`${a.activity_id}-cross-${i}`} position={[c.lat, c.lng]} icon={makeFlagIcon(c.from, c.to)}>
                   <Popup>
                     <div style={{ fontSize: 13 }}>
                       <b>Border crossing</b><br />
@@ -347,8 +350,6 @@ export default function TouringTab({ start, end }: Props) {
                 </Marker>
               ))
             )}
-
-            {/* Sleep markers */}
             {sleepMarkers.map(s => (
               <Marker key={s.date} position={[s.lat, s.lng]} icon={makeSleepIcon(s.score)}>
                 <Popup>
@@ -359,8 +360,6 @@ export default function TouringTab({ start, end }: Props) {
                 </Popup>
               </Marker>
             ))}
-
-            {/* Current position from time slider */}
             {currentPos && (
               <Marker position={currentPos} icon={makeCircleIcon('#f97316', 14)}>
                 <Popup><div style={{ fontSize: 12 }}>{fmtDateTime(currentMs)}</div></Popup>
@@ -368,21 +367,15 @@ export default function TouringTab({ start, end }: Props) {
             )}
           </MapContainer>
         </div>
-
-        {/* Map legend */}
         <div className="flex flex-wrap items-center gap-4 px-4 py-2 bg-slate-800/80 text-xs text-slate-400">
           {Array.from(new Set(activities.map(a => a.activity_type))).map(t => (
             <div key={t} className="flex items-center gap-1.5">
               <div className="w-4 h-1.5 rounded" style={{ backgroundColor: activityColor(t) }} />
-              <span>{t.split('_').map(w => w[0] + w.slice(1).toLowerCase()).join(' ')}</span>
+              <span>{fmtType(t)}</span>
             </div>
           ))}
-          <div className="flex items-center gap-1.5">
-            <span className="text-base">🏁</span><span>Border crossing</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-base">🌙</span><span>Sleep stop</span>
-          </div>
+          <div className="flex items-center gap-1.5"><span>🏁</span><span>Border crossing</span></div>
+          <div className="flex items-center gap-1.5"><span>🌙</span><span>Sleep stop</span></div>
           {totalMinutes > 0 && (
             <div className="flex items-center gap-1.5">
               <div className="w-3.5 h-3.5 rounded-full bg-orange-500 border-2 border-white" />
@@ -420,7 +413,7 @@ export default function TouringTab({ start, end }: Props) {
         </div>
       )}
 
-      {/* Daily weather */}
+      {/* Weather by day */}
       {activities.some(a => a.weather_data) && (
         <div className="bg-slate-800 rounded-xl p-4">
           <h3 className="text-sm font-semibold text-slate-300 mb-3">Weather by Day</h3>
@@ -435,6 +428,506 @@ export default function TouringTab({ start, end }: Props) {
         <h3 className="text-sm font-semibold text-slate-300 mb-3">Countries</h3>
         <CountrySummary activities={activities} />
       </div>
+    </div>
+  )
+}
+
+// ─── BrowseView ───────────────────────────────────────────────────────────────
+
+function BrowseView({ start, end }: { start: string; end: string }) {
+  const [data, setData] = useState<TouringData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    fetchTouringData(start, end)
+      .then(setData)
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [start, end])
+
+  if (loading) return <Spinner />
+  if (!data?.activities?.length) return (
+    <div className="bg-slate-800 rounded-xl p-8 text-center text-slate-500">
+      No activities with GPS routes in this period
+    </div>
+  )
+
+  return (
+    <div className="space-y-4">
+      <TourMapView activities={data.activities} sleep={data.sleep} />
+      <TrainingLoadChart data={data.activities as unknown as Activity[]} />
+      <ActivityPaceChart data={data.activities as unknown as Activity[]} />
+    </div>
+  )
+}
+
+// ─── TourDetailView ───────────────────────────────────────────────────────────
+
+interface TourDetailViewProps {
+  tourId: number
+  onBack: () => void
+  onDelete: () => void
+  onUpdated: (name: string, description: string | null) => void
+}
+
+function TourDetailView({ tourId, onBack, onDelete, onUpdated }: TourDetailViewProps) {
+  const [detail, setDetail] = useState<TourDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [editDesc, setEditDesc] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setLoading(true)
+    fetchTourDetail(tourId)
+      .then(d => { setDetail(d); setEditName(d.tour.name); setEditDesc(d.tour.description ?? '') })
+      .catch(() => setDetail(null))
+      .finally(() => setLoading(false))
+  }, [tourId])
+
+  async function handleSave() {
+    if (!detail || !editName.trim()) return
+    setSaving(true)
+    try {
+      await apiUpdateTour(tourId, { name: editName.trim(), description: editDesc.trim() || null })
+      setDetail(d => d ? { ...d, tour: { ...d.tour, name: editName.trim(), description: editDesc.trim() || null } } : d)
+      onUpdated(editName.trim(), editDesc.trim() || null)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete() {
+    await apiDeleteTour(tourId)
+    onDelete()
+  }
+
+  if (loading) return <Spinner />
+  if (!detail) return (
+    <div className="bg-slate-800 rounded-xl p-8 text-center text-slate-500">Tour not found</div>
+  )
+
+  const { tour, activities, sleep } = detail
+  const dateRange = activities.length
+    ? fmtTourDates(activities[0].start_time.slice(0, 10), activities[activities.length - 1].start_time.slice(0, 10))
+    : ''
+
+  return (
+    <div className="space-y-4">
+      {/* Tour header */}
+      <div className="bg-slate-800 rounded-xl p-4">
+        <div className="flex items-start gap-3">
+          <button onClick={onBack} className="text-slate-400 hover:text-white mt-0.5 shrink-0 text-xl leading-none">←</button>
+          <div className="flex-1 min-w-0">
+            {editing ? (
+              <div className="space-y-2">
+                <input
+                  value={editName}
+                  onChange={e => setEditName(e.target.value)}
+                  placeholder="Tour name"
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
+                />
+                <input
+                  value={editDesc}
+                  onChange={e => setEditDesc(e.target.value)}
+                  placeholder="Description (optional)"
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-300 focus:outline-none focus:border-blue-500"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSave}
+                    disabled={saving || !editName.trim()}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-xs font-medium text-white"
+                  >
+                    {saving ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => { setEditing(false); setEditName(tour.name); setEditDesc(tour.description ?? '') }}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-medium text-slate-300"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <h2 className="text-base font-semibold text-white">{tour.name}</h2>
+                {tour.description && <p className="text-sm text-slate-400 mt-0.5">{tour.description}</p>}
+                {dateRange && <p className="text-xs text-slate-500 mt-0.5">{dateRange} · {activities.length} activities</p>}
+              </>
+            )}
+          </div>
+          {!editing && (
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setEditing(true)}
+                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-medium text-slate-300"
+              >
+                Rename
+              </button>
+              {confirmDelete ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-red-400">Delete?</span>
+                  <button onClick={handleDelete} className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs font-medium text-white">Yes</button>
+                  <button onClick={() => setConfirmDelete(false)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-medium text-slate-300">No</button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  className="px-3 py-1.5 bg-slate-700 hover:bg-red-900/60 rounded-lg text-xs font-medium text-slate-400 hover:text-red-300 transition-colors"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {activities.length > 0 ? (
+        <>
+          <TourMapView activities={activities} sleep={sleep} />
+          <TrainingLoadChart data={activities as unknown as Activity[]} />
+          <ActivityPaceChart data={activities as unknown as Activity[]} />
+
+          {/* Activity list */}
+          <div className="bg-slate-800 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-700">
+              <h3 className="text-sm font-semibold text-slate-300">Activities</h3>
+            </div>
+            <div className="divide-y divide-slate-700/50">
+              {activities.map(a => (
+                <div key={a.activity_id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-700/30 transition-colors">
+                  <span className="text-base shrink-0">{typeEmoji(a.activity_type)}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-slate-200 truncate">{a.name}</div>
+                    <div className="text-xs text-slate-500">
+                      {new Date(a.start_time).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                      {a.country ? ` · ${flagOf(a.country)} ${nameOf(a.country)}` : ''}
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-sm text-slate-300">{fmtKm(a.distance_meters)}</div>
+                    <div className="text-xs text-slate-500">
+                      {fmtDur(a.duration_seconds)}{a.elevation_gain_m ? ` · +${Math.round(a.elevation_gain_m)}m` : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="bg-slate-800 rounded-xl p-8 text-center text-slate-500">No activities in this tour</div>
+      )}
+    </div>
+  )
+}
+
+// ─── TourCreator ──────────────────────────────────────────────────────────────
+
+interface TourCreatorProps {
+  start: string
+  end: string
+  onCreated: (tourId: number) => void
+  onCancel: () => void
+}
+
+function TourCreator({ start, end, onCreated, onCancel }: TourCreatorProps) {
+  const [activities, setActivities] = useState<Activity[]>([])
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const nameRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    fetchActivities(start, end)
+      .then(acts => setActivities([...acts].sort((a, b) => a.start_time.localeCompare(b.start_time))))
+      .catch(() => setActivities([]))
+      .finally(() => setLoading(false))
+  }, [start, end])
+
+  useEffect(() => { nameRef.current?.focus() }, [])
+
+  const allSelected = activities.length > 0 && selected.size === activities.length
+
+  function toggle(id: number) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  async function handleCreate() {
+    if (!name.trim() || selected.size === 0) return
+    setSaving(true)
+    try {
+      const { id } = await apiCreateTour(name.trim(), description.trim() || null, Array.from(selected))
+      onCreated(id)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const byDate = useMemo(() => {
+    const groups: Record<string, Activity[]> = {}
+    for (const a of activities) {
+      const d = a.start_time.slice(0, 10)
+      if (!groups[d]) groups[d] = []
+      groups[d].push(a)
+    }
+    return groups
+  }, [activities])
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button onClick={onCancel} className="text-slate-400 hover:text-white text-xl leading-none">←</button>
+        <h2 className="text-base font-semibold text-white">New Tour</h2>
+      </div>
+
+      <div className="bg-slate-800 rounded-xl p-4 space-y-3">
+        <div>
+          <label className="text-xs text-slate-400 mb-1 block">Tour name *</label>
+          <input
+            ref={nameRef}
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder="e.g. Munich → Vienna 2025"
+            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 placeholder-slate-500"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-slate-400 mb-1 block">Description (optional)</label>
+          <input
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder="Notes about the tour…"
+            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-blue-500 placeholder-slate-500"
+          />
+        </div>
+      </div>
+
+      <div className="bg-slate-800 rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-300">Select Activities</h3>
+            <p className="text-xs text-slate-500 mt-0.5">{start} – {end} · {selected.size} of {activities.length} selected</p>
+          </div>
+          {!loading && activities.length > 0 && (
+            <button
+              onClick={() => setSelected(allSelected ? new Set() : new Set(activities.map(a => a.activity_id)))}
+              className="text-xs text-blue-400 hover:text-blue-300"
+            >
+              {allSelected ? 'Deselect all' : 'Select all'}
+            </button>
+          )}
+        </div>
+
+        {loading ? (
+          <div className="p-8 flex justify-center">
+            <div className="w-6 h-6 border-2 border-slate-600 border-t-blue-400 rounded-full animate-spin" />
+          </div>
+        ) : activities.length === 0 ? (
+          <div className="p-8 text-center text-slate-500 text-sm">No activities in this period</div>
+        ) : (
+          <div className="divide-y divide-slate-700/40 max-h-[520px] overflow-y-auto">
+            {Object.entries(byDate).map(([date, acts]) => (
+              <div key={date}>
+                <div className="px-4 py-1.5 bg-slate-900/50 text-xs text-slate-500 font-medium sticky top-0">
+                  {new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                </div>
+                {acts.map(a => (
+                  <label key={a.activity_id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-700/30 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(a.activity_id)}
+                      onChange={() => toggle(a.activity_id)}
+                      className="rounded accent-blue-500 shrink-0 w-4 h-4"
+                    />
+                    <span className="text-base shrink-0">{typeEmoji(a.activity_type)}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-slate-200 truncate">{a.name}</div>
+                      <div className="text-xs text-slate-500">{fmtType(a.activity_type)}</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-sm text-slate-300">{fmtKm(a.distance_meters)}</div>
+                      <div className="text-xs text-slate-500">{fmtDur(a.duration_seconds)}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="flex justify-end gap-3">
+        <button
+          onClick={onCancel}
+          className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium text-slate-300"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleCreate}
+          disabled={saving || !name.trim() || selected.size === 0}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium text-white"
+        >
+          {saving ? 'Creating…' : `Create Tour (${selected.size} activities)`}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── TourListView ─────────────────────────────────────────────────────────────
+
+interface TourListViewProps {
+  tours: TourSummary[]
+  loading: boolean
+  onSelect: (id: number) => void
+  onNew: () => void
+  onBrowse: () => void
+}
+
+function TourListView({ tours, loading, onSelect, onNew, onBrowse }: TourListViewProps) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-semibold text-slate-200">Saved Tours</h2>
+        <button onClick={onBrowse} className="text-sm text-blue-400 hover:text-blue-300">
+          Browse current range →
+        </button>
+      </div>
+
+      <button
+        onClick={onNew}
+        className="w-full border-2 border-dashed border-slate-700 hover:border-blue-500/60 rounded-xl py-4 text-sm text-slate-500 hover:text-blue-400 transition-colors flex items-center justify-center gap-2"
+      >
+        <span className="text-lg leading-none">+</span>
+        <span>New Tour</span>
+      </button>
+
+      {loading ? (
+        <div className="flex justify-center py-8">
+          <div className="w-6 h-6 border-2 border-slate-600 border-t-blue-400 rounded-full animate-spin" />
+        </div>
+      ) : tours.length === 0 ? (
+        <div className="bg-slate-800 rounded-xl p-10 text-center">
+          <div className="text-4xl mb-3">🗺️</div>
+          <p className="text-sm text-slate-400 font-medium">No saved tours yet</p>
+          <p className="text-xs text-slate-500 mt-1">Pick a date range, click New Tour, and select your activities</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {tours.map(t => (
+            <button
+              key={t.id}
+              onClick={() => onSelect(t.id)}
+              className="bg-slate-800 hover:bg-slate-700 rounded-xl p-4 text-left transition-colors group"
+            >
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <h3 className="text-sm font-semibold text-slate-100 group-hover:text-blue-300 transition-colors leading-snug">
+                  {t.name}
+                </h3>
+                <span className="text-xs text-slate-500 shrink-0">{t.activity_count} acts</span>
+              </div>
+              {t.description && (
+                <p className="text-xs text-slate-400 mb-2 line-clamp-2">{t.description}</p>
+              )}
+              <div className="flex items-end justify-between mt-2">
+                <span className="text-xl font-semibold text-slate-100">{fmtKmNum(t.total_km)}</span>
+                <div className="text-right">
+                  {t.start_date && (
+                    <div className="text-xs text-slate-500">{fmtTourDates(t.start_date, t.end_date)}</div>
+                  )}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+type View = 'list' | 'browse' | 'create' | 'detail'
+
+interface Props { start: string; end: string }
+
+export default function TouringTab({ start, end }: Props) {
+  const [view, setView] = useState<View>('list')
+  const [selectedTourId, setSelectedTourId] = useState<number | null>(null)
+  const [tours, setTours] = useState<TourSummary[]>([])
+  const [toursLoading, setToursLoading] = useState(true)
+
+  function loadTours() {
+    setToursLoading(true)
+    fetchTours()
+      .then(setTours)
+      .catch(() => setTours([]))
+      .finally(() => setToursLoading(false))
+  }
+
+  useEffect(() => { loadTours() }, [])
+
+  function openTour(id: number) { setSelectedTourId(id); setView('detail') }
+
+  function handleCreated(id: number) { loadTours(); openTour(id) }
+
+  function handleDeleted() { loadTours(); setView('list') }
+
+  function handleUpdated(name: string, description: string | null) {
+    setTours(ts => ts.map(t => t.id === selectedTourId ? { ...t, name, description } : t))
+  }
+
+  return (
+    <div>
+      {view === 'list' && (
+        <TourListView
+          tours={tours}
+          loading={toursLoading}
+          onSelect={openTour}
+          onNew={() => setView('create')}
+          onBrowse={() => setView('browse')}
+        />
+      )}
+      {view === 'browse' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setView('list')} className="text-slate-400 hover:text-white text-xl leading-none">←</button>
+            <h2 className="text-sm font-medium text-slate-400">Browse: {start} – {end}</h2>
+          </div>
+          <BrowseView start={start} end={end} />
+        </div>
+      )}
+      {view === 'create' && (
+        <TourCreator
+          start={start}
+          end={end}
+          onCreated={handleCreated}
+          onCancel={() => setView('list')}
+        />
+      )}
+      {view === 'detail' && selectedTourId != null && (
+        <TourDetailView
+          tourId={selectedTourId}
+          onBack={() => setView('list')}
+          onDelete={handleDeleted}
+          onUpdated={handleUpdated}
+        />
+      )}
     </div>
   )
 }
