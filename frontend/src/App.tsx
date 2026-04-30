@@ -25,6 +25,7 @@ import ActivityMap from './components/ActivityMap'
 import ActivityPaceChart from './components/ActivityPaceChart'
 import PersonalBestsTable from './components/PersonalBestsTable'
 import CountryStats from './components/CountryStats'
+import TouringTab from './components/TouringTab'
 
 // ─── Range ────────────────────────────────────────────────────────────────────
 
@@ -50,7 +51,7 @@ function daysAgo(n: number): string {
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-const TABS = ['Overview', 'Health', 'Sleep', 'Activity'] as const
+const TABS = ['Overview', 'Health', 'Sleep', 'Activity', 'Touring'] as const
 type Tab = typeof TABS[number]
 
 // ─── Spinner ──────────────────────────────────────────────────────────────────
@@ -274,6 +275,10 @@ export default function App() {
                 )}
                 <ActivitiesTable data={activities} onSelectActivity={id => { setMapHighlightId(id); setTab('Activity'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
               </>
+            )}
+            {/* ── Touring ──────────────────────────────────────────────── */}
+            {tab === 'Touring' && (
+              <TouringTab start={start} end={end} />
             )}
           </>
         )}

@@ -204,6 +204,43 @@ def get_activities(
         return cur.fetchall()
 
 
+# ─── Touring ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/touring")
+def get_touring(
+    start: Optional[date] = Query(default=None),
+    end:   Optional[date] = Query(default=None),
+):
+    """Activities with polylines, weather, and country crossings for the touring tab."""
+    if start is None or end is None:
+        start, end = default_range()
+    with db.cursor() as cur:
+        cur.execute(
+            """
+            SELECT activity_id, start_time, activity_type, name,
+                   duration_seconds, distance_meters, elevation_gain_m, avg_speed_mps,
+                   start_lat, start_lng, end_lat, end_lng,
+                   polyline, weather_data, country_crossings, country
+            FROM activities
+            WHERE start_time::date BETWEEN %s AND %s
+              AND polyline IS NOT NULL
+              AND start_lat IS NOT NULL
+            ORDER BY start_time ASC
+            """,
+            (start, end),
+        )
+        activities = cur.fetchall()
+        cur.execute(
+            """
+            SELECT date, start_time, end_time, duration_seconds, sleep_score, avg_spo2
+            FROM sleep WHERE date BETWEEN %s AND %s ORDER BY date ASC
+            """,
+            (start, end),
+        )
+        sleep = cur.fetchall()
+    return {"activities": activities, "sleep": sleep}
+
+
 # ─── Country statistics ───────────────────────────────────────────────────────
 
 @app.get("/api/activities/countries")

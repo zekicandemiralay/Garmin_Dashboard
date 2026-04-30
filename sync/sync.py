@@ -375,8 +375,10 @@ def ensure_schema():
                 ADD COLUMN IF NOT EXISTS avg_speed_mps    FLOAT,
                 ADD COLUMN IF NOT EXISTS avg_cadence      INTEGER,
                 ADD COLUMN IF NOT EXISTS avg_power        INTEGER,
-                ADD COLUMN IF NOT EXISTS polyline         JSONB,
-                ADD COLUMN IF NOT EXISTS country          VARCHAR(10);
+                ADD COLUMN IF NOT EXISTS polyline          JSONB,
+                ADD COLUMN IF NOT EXISTS country           VARCHAR(10),
+                ADD COLUMN IF NOT EXISTS weather_data      JSONB,
+                ADD COLUMN IF NOT EXISTS country_crossings JSONB;
             ALTER TABLE daily_summary
                 ADD COLUMN IF NOT EXISTS min_hr_day INTEGER,
                 ADD COLUMN IF NOT EXISTS max_hr_day INTEGER
@@ -451,6 +453,101 @@ def populate_missing_countries(conn):
             cur.execute("UPDATE activities SET country = %s WHERE activity_id = %s", (country_code, activity_id))
     conn.commit()
     log.info(f"Countries: tagged {len(updates)} activities")
+
+
+def fetch_weather_for_activities(conn):
+    """Fetch hourly historical weather from Open-Meteo for outdoor activities missing weather data."""
+    import requests as req
+    cutoff = date.today() - timedelta(days=2)   # Open-Meteo archive requires >2 days ago
+    placeholders = ','.join(['%s'] * len(OUTDOOR_TYPES))
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT activity_id, start_time::date, start_lat, start_lng
+            FROM activities
+            WHERE start_lat IS NOT NULL
+              AND weather_data IS NULL
+              AND start_time::date <= %s
+              AND activity_type IN ({placeholders})
+            ORDER BY start_time DESC
+            LIMIT 20
+        """, (cutoff, *OUTDOOR_TYPES))
+        rows = cur.fetchall()
+    if not rows:
+        return
+    updated = 0
+    for row in rows:
+        try:
+            ds = str(row[1])
+            url = (
+                f"https://archive-api.open-meteo.com/v1/archive"
+                f"?latitude={row[2]:.4f}&longitude={row[3]:.4f}"
+                f"&start_date={ds}&end_date={ds}"
+                f"&hourly=temperature_2m,precipitation,wind_speed_10m,"
+                f"wind_direction_10m,weather_code,relative_humidity_2m"
+                f"&timezone=auto"
+            )
+            resp = req.get(url, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json().get("hourly", {})
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE activities SET weather_data = %s WHERE activity_id = %s",
+                        (json.dumps(data), row[0]),
+                    )
+                conn.commit()
+                updated += 1
+            time.sleep(0.3)
+        except Exception as e:
+            log.warning(f"Weather fetch failed for activity {row[0]}: {e}")
+    if updated:
+        log.info(f"Weather: fetched data for {updated} activities")
+
+
+def compute_country_crossings(conn):
+    """Sample polyline points and detect country border crossings."""
+    if not HAS_GEOCODER:
+        return
+    placeholders = ','.join(['%s'] * len(OUTDOOR_TYPES))
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT activity_id, polyline
+            FROM activities
+            WHERE polyline IS NOT NULL
+              AND country_crossings IS NULL
+              AND activity_type IN ({placeholders})
+            LIMIT 50
+        """, OUTDOOR_TYPES)
+        rows = cur.fetchall()
+    if not rows:
+        return
+    updated = 0
+    for row in rows:
+        try:
+            polyline = row[1] if isinstance(row[1], list) else json.loads(row[1])
+            if not polyline or len(polyline) < 2:
+                crossings = []
+            else:
+                step = max(1, len(polyline) // 60)
+                samples = polyline[::step]
+                coords = [(p[0], p[1]) for p in samples]
+                results = rg.search(coords, mode=1)
+                crossings, prev_cc = [], None
+                for pt, res in zip(samples, results):
+                    cc = res.get("cc", "??")
+                    if prev_cc and cc != prev_cc:
+                        crossings.append({"lat": pt[0], "lng": pt[1], "from": prev_cc, "to": cc})
+                    prev_cc = cc
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE activities SET country_crossings = %s WHERE activity_id = %s",
+                    (json.dumps(crossings), row[0]),
+                )
+            conn.commit()
+            updated += 1
+        except Exception as e:
+            log.warning(f"Crossings failed for {row[0]}: {e}")
+    if updated:
+        log.info(f"Crossings: computed for {updated} activities")
 
 
 def main():

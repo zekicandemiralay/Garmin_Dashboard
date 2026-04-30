@@ -87,6 +87,54 @@ export interface MapActivity {
   polyline: number[][] | null  // each point: [lat, lng] or [lat, lng, speed_mps]
 }
 
+export interface WeatherHourly {
+  time: string[]
+  temperature_2m: number[]
+  precipitation: number[]
+  wind_speed_10m: number[]
+  wind_direction_10m: number[]
+  weather_code: number[]
+  relative_humidity_2m: number[]
+}
+
+export interface CountryCrossing {
+  lat: number
+  lng: number
+  from: string
+  to: string
+}
+
+export interface TouringActivity {
+  activity_id: number
+  start_time: string
+  activity_type: string
+  name: string
+  duration_seconds: number | null
+  distance_meters: number | null
+  elevation_gain_m: number | null
+  avg_speed_mps: number | null
+  start_lat: number
+  start_lng: number
+  end_lat: number | null
+  end_lng: number | null
+  polyline: number[][]
+  weather_data: WeatherHourly | null
+  country_crossings: CountryCrossing[] | null
+  country: string | null
+}
+
+export interface TouringData {
+  activities: TouringActivity[]
+  sleep: {
+    date: string
+    start_time: string | null
+    end_time: string | null
+    duration_seconds: number | null
+    sleep_score: number | null
+    avg_spo2: number | null
+  }[]
+}
+
 export interface CountryTypeStat {
   type: string
   count: number
