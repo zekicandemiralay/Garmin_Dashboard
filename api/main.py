@@ -19,7 +19,7 @@ app = FastAPI(title="Garmin Dashboard API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # tighten this once frontend is deployed
-    allow_methods=["GET"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -220,6 +220,7 @@ def get_touring(
             """
             SELECT activity_id, start_time, activity_type, name,
                    duration_seconds, distance_meters, elevation_gain_m, avg_speed_mps,
+                   avg_hr, avg_pace_sec_per_km, calories,
                    start_lat, start_lng, end_lat, end_lng,
                    polyline, weather_data, country_crossings, country
             FROM activities

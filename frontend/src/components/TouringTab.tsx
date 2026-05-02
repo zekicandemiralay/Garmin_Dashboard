@@ -456,16 +456,23 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
 function BrowseView({ start, end }: { start: string; end: string }) {
   const [data, setData] = useState<TouringData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     setLoading(true)
+    setError(null)
     fetchTouringData(start, end)
-      .then(setData)
-      .catch(() => setData(null))
+      .then(d => { setData(d); setError(null) })
+      .catch(e => { setData(null); setError(e instanceof Error ? e.message : String(e)) })
       .finally(() => setLoading(false))
   }, [start, end])
 
   if (loading) return <Spinner />
+  if (error) return (
+    <div className="bg-slate-800 rounded-xl p-8 text-center text-red-400 text-sm">
+      Failed to load activities: {error}
+    </div>
+  )
   if (!data?.activities?.length) return (
     <div className="bg-slate-800 rounded-xl p-8 text-center text-slate-500">
       No activities with GPS routes in this period
