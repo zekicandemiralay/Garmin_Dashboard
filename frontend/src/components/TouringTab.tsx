@@ -241,6 +241,7 @@ type SleepEntry = TouringData['sleep'][number]
 
 function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sleep: SleepEntry[] }) {
   const [sliderValue, setSliderValue] = useState(0)
+  const [topo, setTopo] = useState(false)
 
   const fitKey = useMemo(() => activities.map(a => a.activity_id).join(','), [activities])
 
@@ -316,11 +317,18 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
       <div className="bg-slate-800 rounded-xl overflow-hidden">
         <div style={{ height: 520 }}>
           <MapContainer center={[47, 13]} zoom={6} style={{ height: '100%', width: '100%' }}>
-            <TileLayer
-              url="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png"
-              attribution='&copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)'
-              maxZoom={17}
-            />
+            {topo ? (
+              <TileLayer
+                url="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png"
+                attribution='&copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)'
+                maxZoom={17}
+              />
+            ) : (
+              <TileLayer
+                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+              />
+            )}
             {allPts.length > 0 && <AutoFit pts={allPts} fitKey={fitKey} />}
             {activities.map(a => (
               <Polyline
@@ -382,6 +390,16 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
               <span>Your position</span>
             </div>
           )}
+          <button
+            onClick={() => setTopo(t => !t)}
+            className={`ml-auto px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+              topo
+                ? 'bg-green-600/20 border-green-600/50 text-green-300 hover:bg-green-600/30'
+                : 'bg-slate-700 border-slate-600 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {topo ? '🗺 Terrain' : '🌑 Dark'}
+          </button>
         </div>
       </div>
 
@@ -414,14 +432,15 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
       )}
 
       {/* Weather by day */}
-      {activities.some(a => a.weather_data) && (
-        <div className="bg-slate-800 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-slate-300 mb-3">Weather by Day</h3>
-          <div className="flex gap-3 overflow-x-auto pb-1">
-            {activities.map(a => <WeatherCard key={a.activity_id} act={a} />)}
-          </div>
+      <div className="bg-slate-800 rounded-xl p-4">
+        <h3 className="text-sm font-semibold text-slate-300 mb-3">Weather by Day</h3>
+        <div className="flex gap-3 overflow-x-auto pb-1">
+          {activities.map(a => <WeatherCard key={a.activity_id} act={a} />)}
         </div>
-      )}
+        {!activities.some(a => a.weather_data) && (
+          <p className="text-xs text-slate-500 mt-2">Weather data is fetched automatically for activities older than 2 days. Check back soon.</p>
+        )}
+      </div>
 
       {/* Country summary */}
       <div className="bg-slate-800 rounded-xl p-4">
