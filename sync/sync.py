@@ -6,6 +6,7 @@ After that it syncs the last 2 days every SYNC_INTERVAL_SECONDS seconds.
 """
 
 import os
+import json
 import time
 import logging
 from datetime import date, timedelta, datetime, timezone
