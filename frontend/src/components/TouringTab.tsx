@@ -395,10 +395,10 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
             className={`ml-auto px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
               topo
                 ? 'bg-green-600/20 border-green-600/50 text-green-300 hover:bg-green-600/30'
-                : 'bg-slate-700 border-slate-600 text-slate-400 hover:text-slate-200'
+                : 'bg-slate-700 border-slate-600 text-slate-300 hover:text-white'
             }`}
           >
-            {topo ? '🗺 Terrain' : '🌑 Dark'}
+            {topo ? '🌑 Dark' : '🗺 Terrain'}
           </button>
         </div>
       </div>
@@ -438,7 +438,7 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
           {activities.map(a => <WeatherCard key={a.activity_id} act={a} />)}
         </div>
         {!activities.some(a => a.weather_data) && (
-          <p className="text-xs text-slate-500 mt-2">Weather data is fetched automatically for activities older than 2 days. Check back soon.</p>
+          <p className="text-xs text-slate-500 mt-2">Weather is fetched automatically for activities older than 2 days — check back after the next sync cycle.</p>
         )}
       </div>
 
