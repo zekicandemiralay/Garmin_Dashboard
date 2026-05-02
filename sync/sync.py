@@ -592,7 +592,9 @@ def main():
             remaining = sync_missing_gps(conn)
             if remaining == 0:
                 break
-        populate_missing_countries(conn)  # tag activities with ISO2 country code
+        populate_missing_countries(conn)
+        compute_country_crossings(conn)
+        fetch_weather_for_activities(conn)
         conn.close()
         log.info(f"Sleeping {INTERVAL}s until next sync...")
         time.sleep(INTERVAL)
