@@ -442,35 +442,36 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
   )
   const sleepMarkers = useMemo(() => {
     return sleep.map(s => {
-      const sleepDateStr = s.date                                      // YYYY-MM-DD
-      const prevDateStr  = new Date(+new Date(sleepDateStr + 'T12:00:00') - 86400000)
-        .toISOString().slice(0, 10)
-      const nextDateStr  = new Date(+new Date(sleepDateStr + 'T12:00:00') + 86400000)
-        .toISOString().slice(0, 10)
+      // Garmin sleep.date is the wake-up date (morning after). sleep.start_time is when they fell asleep.
+      // Use start_time as the cutoff so activities after going to bed are excluded.
+      // Fallback: midnight of the sleep date (start of wake-up day) to exclude same-day post-wake activities.
+      const cutoffMs = s.start_time
+        ? +new Date(s.start_time)
+        : +new Date(s.date + 'T00:00:00')
 
-      // Last activity on sleep-date or previous date → use its end point
+      const sleepEndMs = s.end_time ? +new Date(s.end_time) : null
+
+      // Last activity that started before bedtime
       const lastAct = activities
-        .filter(a => {
-          const d = a.start_time.slice(0, 10)
-          return d === sleepDateStr || d === prevDateStr
-        })
+        .filter(a => +new Date(a.start_time) < cutoffMs)
         .sort((a, b) => +new Date(b.start_time) - +new Date(a.start_time))[0]
 
-      // First activity on next day → use its start point (where they woke up)
-      const nextAct = activities
-        .filter(a => a.start_time.slice(0, 10) === nextDateStr)
-        .sort((a, b) => +new Date(a.start_time) - +new Date(b.start_time))[0]
+      // First activity after waking up (fallback location if no end point)
+      const nextAct = sleepEndMs
+        ? activities
+            .filter(a => +new Date(a.start_time) > sleepEndMs)
+            .sort((a, b) => +new Date(a.start_time) - +new Date(b.start_time))[0]
+        : undefined
 
       let lat: number | null = null, lng: number | null = null
 
-      // Prefer: end_lat/end_lng of last activity, then next-day start, then last polyline point
       if (lastAct?.end_lat != null && lastAct?.end_lng != null) {
         lat = lastAct.end_lat; lng = lastAct.end_lng
-      } else if (nextAct?.start_lat != null && nextAct?.start_lng != null) {
-        lat = nextAct.start_lat; lng = nextAct.start_lng
       } else if (lastAct?.polyline?.length) {
         const pt = lastAct.polyline[lastAct.polyline.length - 1]
         lat = pt[0]; lng = pt[1]
+      } else if (nextAct?.start_lat != null && nextAct?.start_lng != null) {
+        lat = nextAct.start_lat; lng = nextAct.start_lng
       }
 
       if (lat == null || lng == null) return null
