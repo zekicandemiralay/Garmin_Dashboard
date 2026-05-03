@@ -144,9 +144,167 @@ function positionAtTime(activities: TouringActivity[], targetMs: number): [numbe
   return first ? [first[0], first[1]] : null
 }
 
+// ─── Weather color scales ─────────────────────────────────────────────────────
+
+type WeatherLayer = 'default' | 'temperature' | 'wind'
+
+function tempColor(t: number): string {
+  if (t < 0)  return '#93c5fd'
+  if (t < 5)  return '#60a5fa'
+  if (t < 10) return '#38bdf8'
+  if (t < 15) return '#34d399'
+  if (t < 20) return '#a3e635'
+  if (t < 25) return '#fbbf24'
+  if (t < 30) return '#f97316'
+  return '#ef4444'
+}
+
+function windColor(v: number): string {
+  if (v < 5)  return '#34d399'
+  if (v < 15) return '#a3e635'
+  if (v < 25) return '#fbbf24'
+  if (v < 35) return '#f97316'
+  return '#ef4444'
+}
+
+const TEMP_SCALE = [
+  { label: '<0°', color: '#93c5fd' }, { label: '5°', color: '#60a5fa' },
+  { label: '10°', color: '#38bdf8' }, { label: '15°', color: '#34d399' },
+  { label: '20°', color: '#a3e635' }, { label: '25°', color: '#fbbf24' },
+  { label: '30°', color: '#f97316' }, { label: '>30°', color: '#ef4444' },
+]
+const WIND_SCALE = [
+  { label: '<5', color: '#34d399' }, { label: '15', color: '#a3e635' },
+  { label: '25', color: '#fbbf24' }, { label: '35', color: '#f97316' },
+  { label: '>35', color: '#ef4444' },
+]
+
+// ─── Weather-colored polyline ─────────────────────────────────────────────────
+
+function WeatherPolyline({ act, layer }: { act: TouringActivity; layer: WeatherLayer }) {
+  const pts = act.polyline
+  const wd = act.weather_data
+  const defaultOpts = { color: activityColor(act.activity_type), weight: 3, opacity: 0.85 }
+
+  if (!pts?.length) return null
+  if (layer === 'default' || !wd?.temperature_2m?.length) {
+    return (
+      <Polyline positions={pts.map(p => [p[0], p[1]] as [number, number])} pathOptions={defaultOpts}>
+        <Popup>
+          <div style={{ fontSize: 13, minWidth: 160 }}>
+            <div style={{ fontWeight: 600 }}>{act.name}</div>
+            <div style={{ color: '#888', fontSize: 11 }}>{new Date(act.start_time).toLocaleDateString()}</div>
+            <div style={{ marginTop: 4 }}>{fmtKm(act.distance_meters)} · {fmtDur(act.duration_seconds)}</div>
+            {act.elevation_gain_m != null && <div style={{ color: '#aaa', fontSize: 11 }}>+{Math.round(act.elevation_gain_m)} m elevation</div>}
+          </div>
+        </Popup>
+      </Polyline>
+    )
+  }
+
+  const startMs = +new Date(act.start_time)
+  const durMs = (act.duration_seconds || 1) * 1000
+
+  interface Seg { pts: [number, number][]; idx: number }
+  const segs: Seg[] = []
+  for (let i = 0; i < pts.length; i++) {
+    const frac = pts.length > 1 ? i / (pts.length - 1) : 0
+    const ms = startMs + frac * durMs
+    const idx = getHourIndex(wd, ms)
+    if (!segs.length || segs[segs.length - 1].idx !== idx) {
+      const prev = segs.length ? [segs[segs.length - 1].pts[segs[segs.length - 1].pts.length - 1]] : []
+      segs.push({ pts: [...prev, [pts[i][0], pts[i][1]]], idx })
+    } else {
+      segs[segs.length - 1].pts.push([pts[i][0], pts[i][1]])
+    }
+  }
+
+  return (
+    <>
+      {segs.map((seg, i) => {
+        const val = layer === 'temperature'
+          ? wd.temperature_2m[seg.idx]
+          : wd.wind_speed_10m?.[seg.idx]
+        const color = val != null
+          ? (layer === 'temperature' ? tempColor(val) : windColor(val))
+          : activityColor(act.activity_type)
+        return <Polyline key={i} positions={seg.pts} pathOptions={{ color, weight: 4, opacity: 0.9 }} />
+      })}
+    </>
+  )
+}
+
+// ─── Hourly weather chart (SVG) ───────────────────────────────────────────────
+
+function WeatherHourlyChart({ act }: { act: TouringActivity }) {
+  const wd = act.weather_data
+  if (!wd?.temperature_2m?.length) return null
+
+  const temps = wd.temperature_2m
+  const precip = wd.precipitation ?? []
+  const wind = wd.wind_speed_10m ?? []
+
+  const validTemps = temps.filter(t => t != null)
+  if (!validTemps.length) return null
+
+  const minT = Math.min(...validTemps) - 2
+  const maxT = Math.max(...validTemps) + 2
+  const range = maxT - minT || 1
+  const toTY = (t: number) => 42 - ((t - minT) / range) * 36
+
+  const maxP = Math.max(...precip.filter(p => p != null), 0.1)
+  const maxW = Math.max(...wind.filter(w => w != null), 1)
+
+  const startMs = +new Date(act.start_time)
+  const endMs = startMs + (act.duration_seconds || 0) * 1000
+  const startH = new Date(startMs).getHours() + new Date(startMs).getMinutes() / 60
+  const endH = new Date(endMs).getHours() + new Date(endMs).getMinutes() / 60
+  const actW = Math.max((endH - startH) * 10, 4)
+
+  const tempPts = temps.map((t, i) => `${i * 10 + 5},${t != null ? toTY(t) : toTY((minT + maxT) / 2)}`).join(' ')
+  const windPts = wind.map((w, i) => `${i * 10 + 5},${w != null ? 49 - (w / maxW) * 14 : 49}`).join(' ')
+
+  return (
+    <div className="mt-2 select-none">
+      <svg viewBox="0 0 240 52" className="w-full" style={{ height: 64, overflow: 'visible' }}>
+        {/* Activity window */}
+        <rect x={startH * 10} y={0} width={actW} height={44} fill="white" opacity={0.07} rx={2} />
+        {/* Precipitation bars */}
+        {precip.map((p, i) => p > 0.05 ? (
+          <rect key={i} x={i * 10} y={44 - (p / maxP) * 14} width={9} height={(p / maxP) * 14} fill="#60a5fa" opacity={0.55} />
+        ) : null)}
+        {/* Wind line (dashed) */}
+        <polyline points={windPts} fill="none" stroke="#94a3b8" strokeWidth={1} strokeDasharray="2,3" opacity={0.7} />
+        {/* Zero line */}
+        {minT < 0 && maxT > 0 && (
+          <line x1={0} y1={toTY(0)} x2={240} y2={toTY(0)} stroke="#64748b" strokeWidth={0.5} strokeDasharray="3,3" />
+        )}
+        {/* Temperature line */}
+        <polyline points={tempPts} fill="none" stroke="#fbbf24" strokeWidth={1.5} />
+        {/* Hour labels */}
+        {[0, 6, 12, 18].map(h => (
+          <text key={h} x={h * 10 + 1} y={51} fontSize={7} fill="#64748b">{h}h</text>
+        ))}
+        {/* Temp labels */}
+        <text x={0} y={toTY(maxT) - 1} fontSize={7} fill="#fbbf24" textAnchor="start">{Math.round(maxT)}°</text>
+        <text x={0} y={toTY(minT) + 8} fontSize={7} fill="#fbbf24" textAnchor="start">{Math.round(minT)}°</text>
+        {/* Wind label */}
+        <text x={235} y={36} fontSize={7} fill="#94a3b8" textAnchor="end">{Math.round(maxW)}↗</text>
+      </svg>
+      <div className="flex gap-3 text-xs text-slate-500 mt-0.5">
+        <span className="text-yellow-400">— temp</span>
+        <span className="text-slate-400">- - wind (km/h)</span>
+        <span className="text-blue-400">▌ precip</span>
+        <span className="text-slate-500 ml-auto">shaded = activity window</span>
+      </div>
+    </div>
+  )
+}
+
 // ─── Weather sub-components ───────────────────────────────────────────────────
 
 function WeatherCard({ act }: { act: TouringActivity }) {
+  const [expanded, setExpanded] = useState(false)
   const wd = act.weather_data
   const label = new Date(act.start_time).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 
@@ -170,13 +328,22 @@ function WeatherCard({ act }: { act: TouringActivity }) {
   )[0] ?? 0
 
   return (
-    <div className="bg-slate-700/60 rounded-lg p-3 min-w-[120px] shrink-0">
-      <div className="text-xs text-slate-400 mb-1">{label}</div>
-      <div className="text-2xl mb-1">{weatherEmoji(dominantCode)}</div>
-      <div className="text-sm font-semibold text-slate-100">{maxT}° / {minT}°</div>
-      {totalPrecip > 0.1 && <div className="text-xs text-blue-300 mt-0.5">💧 {totalPrecip.toFixed(1)} mm</div>}
-      <div className="text-xs text-slate-400 mt-0.5">💨 {maxWind} km/h</div>
-      {act.country && <div className="text-xs text-slate-500 mt-1">{flagOf(act.country)} {nameOf(act.country)}</div>}
+    <div
+      className={`bg-slate-700/60 rounded-lg p-3 shrink-0 cursor-pointer transition-all ${expanded ? 'min-w-[280px]' : 'min-w-[120px]'}`}
+      onClick={() => setExpanded(e => !e)}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-xs text-slate-400 mb-1">{label}</div>
+          <div className="text-2xl mb-1">{weatherEmoji(dominantCode)}</div>
+          <div className="text-sm font-semibold text-slate-100">{maxT}° / {minT}°</div>
+          {totalPrecip > 0.1 && <div className="text-xs text-blue-300 mt-0.5">💧 {totalPrecip.toFixed(1)} mm</div>}
+          <div className="text-xs text-slate-400 mt-0.5">💨 {maxWind} km/h</div>
+          {act.country && <div className="text-xs text-slate-500 mt-1">{flagOf(act.country)} {nameOf(act.country)}</div>}
+        </div>
+        <span className="text-slate-500 text-xs mt-0.5">{expanded ? '▲' : '▼'}</span>
+      </div>
+      {expanded && <WeatherHourlyChart act={act} />}
     </div>
   )
 }
@@ -242,6 +409,7 @@ type SleepEntry = TouringData['sleep'][number]
 function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sleep: SleepEntry[] }) {
   const [sliderValue, setSliderValue] = useState(0)
   const [topo, setTopo] = useState(false)
+  const [weatherLayer, setWeatherLayer] = useState<WeatherLayer>('default')
 
   const fitKey = useMemo(() => activities.map(a => a.activity_id).join(','), [activities])
 
@@ -274,18 +442,39 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
   )
   const sleepMarkers = useMemo(() => {
     return sleep.map(s => {
-      const sleepDate = new Date(s.date).toDateString()
-      const prevDate = new Date(+new Date(s.date) - 86400000).toDateString()
-      const dayActs = activities
+      const sleepDateStr = s.date                                      // YYYY-MM-DD
+      const prevDateStr  = new Date(+new Date(sleepDateStr + 'T12:00:00') - 86400000)
+        .toISOString().slice(0, 10)
+      const nextDateStr  = new Date(+new Date(sleepDateStr + 'T12:00:00') + 86400000)
+        .toISOString().slice(0, 10)
+
+      // Last activity on sleep-date or previous date → use its end point
+      const lastAct = activities
         .filter(a => {
-          const d = new Date(a.start_time).toDateString()
-          return d === sleepDate || d === prevDate
+          const d = a.start_time.slice(0, 10)
+          return d === sleepDateStr || d === prevDateStr
         })
-        .sort((a, b) => +new Date(b.start_time) - +new Date(a.start_time))
-      const last = dayActs[0]
-      if (!last?.polyline?.length) return null
-      const pt = last.polyline[last.polyline.length - 1]
-      return { lat: pt[0], lng: pt[1], date: s.date, score: s.sleep_score, hours: s.duration_seconds }
+        .sort((a, b) => +new Date(b.start_time) - +new Date(a.start_time))[0]
+
+      // First activity on next day → use its start point (where they woke up)
+      const nextAct = activities
+        .filter(a => a.start_time.slice(0, 10) === nextDateStr)
+        .sort((a, b) => +new Date(a.start_time) - +new Date(b.start_time))[0]
+
+      let lat: number | null = null, lng: number | null = null
+
+      // Prefer: end_lat/end_lng of last activity, then next-day start, then last polyline point
+      if (lastAct?.end_lat != null && lastAct?.end_lng != null) {
+        lat = lastAct.end_lat; lng = lastAct.end_lng
+      } else if (nextAct?.start_lat != null && nextAct?.start_lng != null) {
+        lat = nextAct.start_lat; lng = nextAct.start_lng
+      } else if (lastAct?.polyline?.length) {
+        const pt = lastAct.polyline[lastAct.polyline.length - 1]
+        lat = pt[0]; lng = pt[1]
+      }
+
+      if (lat == null || lng == null) return null
+      return { lat, lng, date: s.date, score: s.sleep_score, hours: s.duration_seconds }
     }).filter(Boolean) as { lat: number; lng: number; date: string; score: number | null; hours: number | null }[]
   }, [activities, sleep])
 
@@ -331,20 +520,7 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
             )}
             {allPts.length > 0 && <AutoFit pts={allPts} fitKey={fitKey} />}
             {activities.map(a => (
-              <Polyline
-                key={a.activity_id}
-                positions={a.polyline?.map(p => [p[0], p[1]] as [number, number]) ?? []}
-                pathOptions={{ color: activityColor(a.activity_type), weight: 3, opacity: 0.85 }}
-              >
-                <Popup>
-                  <div style={{ fontSize: 13, minWidth: 160 }}>
-                    <div style={{ fontWeight: 600 }}>{a.name}</div>
-                    <div style={{ color: '#888', fontSize: 11 }}>{new Date(a.start_time).toLocaleDateString()}</div>
-                    <div style={{ marginTop: 4 }}>{fmtKm(a.distance_meters)} · {fmtDur(a.duration_seconds)}</div>
-                    {a.elevation_gain_m != null && <div style={{ color: '#aaa', fontSize: 11 }}>+{Math.round(a.elevation_gain_m)} m elevation</div>}
-                  </div>
-                </Popup>
-              </Polyline>
+              <WeatherPolyline key={a.activity_id} act={a} layer={weatherLayer} />
             ))}
             {activities.flatMap(a =>
               (a.country_crossings ?? []).map((c, i) => (
@@ -375,31 +551,68 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
             )}
           </MapContainer>
         </div>
-        <div className="flex flex-wrap items-center gap-4 px-4 py-2 bg-slate-800/80 text-xs text-slate-400">
-          {Array.from(new Set(activities.map(a => a.activity_type))).map(t => (
-            <div key={t} className="flex items-center gap-1.5">
-              <div className="w-4 h-1.5 rounded" style={{ backgroundColor: activityColor(t) }} />
-              <span>{fmtType(t)}</span>
-            </div>
-          ))}
-          <div className="flex items-center gap-1.5"><span>🏁</span><span>Border crossing</span></div>
-          <div className="flex items-center gap-1.5"><span>🌙</span><span>Sleep stop</span></div>
-          {totalMinutes > 0 && (
-            <div className="flex items-center gap-1.5">
-              <div className="w-3.5 h-3.5 rounded-full bg-orange-500 border-2 border-white" />
-              <span>Your position</span>
-            </div>
-          )}
-          <button
-            onClick={() => setTopo(t => !t)}
-            className={`ml-auto px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
-              topo
-                ? 'bg-green-600/20 border-green-600/50 text-green-300 hover:bg-green-600/30'
-                : 'bg-slate-700 border-slate-600 text-slate-300 hover:text-white'
-            }`}
-          >
-            {topo ? '🌑 Dark' : '🗺 Terrain'}
-          </button>
+        <div className="px-4 py-2 bg-slate-800/80 space-y-2">
+          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
+            {weatherLayer === 'default' && Array.from(new Set(activities.map(a => a.activity_type))).map(t => (
+              <div key={t} className="flex items-center gap-1.5">
+                <div className="w-4 h-1.5 rounded" style={{ backgroundColor: activityColor(t) }} />
+                <span>{fmtType(t)}</span>
+              </div>
+            ))}
+            {weatherLayer === 'temperature' && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-slate-500">°C:</span>
+                {TEMP_SCALE.map(s => (
+                  <div key={s.label} className="flex items-center gap-1">
+                    <div className="w-3 h-2 rounded-sm" style={{ backgroundColor: s.color }} />
+                    <span style={{ color: s.color }}>{s.label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {weatherLayer === 'wind' && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-slate-500">km/h:</span>
+                {WIND_SCALE.map(s => (
+                  <div key={s.label} className="flex items-center gap-1">
+                    <div className="w-3 h-2 rounded-sm" style={{ backgroundColor: s.color }} />
+                    <span style={{ color: s.color }}>{s.label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-1.5"><span>🏁</span><span>Border crossing</span></div>
+            <div className="flex items-center gap-1.5"><span>🌙</span><span>Sleep stop</span></div>
+            {totalMinutes > 0 && (
+              <div className="flex items-center gap-1.5">
+                <div className="w-3.5 h-3.5 rounded-full bg-orange-500 border-2 border-white" />
+                <span>Your position</span>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {(['default', 'temperature', 'wind'] as WeatherLayer[]).map(layer => (
+              <button key={layer} onClick={() => setWeatherLayer(layer)}
+                className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                  weatherLayer === layer
+                    ? 'bg-blue-600/30 border-blue-500/60 text-blue-300'
+                    : 'bg-slate-700 border-slate-600 text-slate-400 hover:text-white'
+                }`}
+              >
+                {layer === 'default' ? '🎨 Route' : layer === 'temperature' ? '🌡 Temp' : '💨 Wind'}
+              </button>
+            ))}
+            <button
+              onClick={() => setTopo(t => !t)}
+              className={`ml-auto px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                topo
+                  ? 'bg-green-600/20 border-green-600/50 text-green-300 hover:bg-green-600/30'
+                  : 'bg-slate-700 border-slate-600 text-slate-300 hover:text-white'
+              }`}
+            >
+              {topo ? '🌑 Dark' : '🗺 Terrain'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -438,7 +651,7 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
           {activities.map(a => <WeatherCard key={a.activity_id} act={a} />)}
         </div>
         {!activities.some(a => a.weather_data) && (
-          <p className="text-xs text-slate-500 mt-2">Weather is fetched automatically for activities older than 2 days — check back after the next sync cycle.</p>
+          <p className="text-xs text-slate-500 mt-2">Weather is fetched automatically each sync cycle. Click any card to see the hourly chart.</p>
         )}
       </div>
 

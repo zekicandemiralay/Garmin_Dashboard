@@ -470,10 +470,26 @@ def populate_missing_countries(conn):
     log.info(f"Countries: tagged {len(updates)} activities")
 
 
+WEATHER_FIELDS = "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,weather_code,relative_humidity_2m"
+ARCHIVE_CUTOFF_DAYS = 5   # Open-Meteo archive requires data to be this many days old
+
+
+def _weather_url(lat: float, lng: float, ds: str, use_archive: bool) -> str:
+    base = "archive-api.open-meteo.com/v1/archive" if use_archive else "api.open-meteo.com/v1/forecast"
+    return (
+        f"https://{base}"
+        f"?latitude={lat:.4f}&longitude={lng:.4f}"
+        f"&start_date={ds}&end_date={ds}"
+        f"&hourly={WEATHER_FIELDS}"
+        f"&timezone=auto"
+    )
+
+
 def fetch_weather_for_activities(conn):
-    """Fetch hourly historical weather from Open-Meteo for outdoor activities missing weather data."""
+    """Fetch hourly weather from Open-Meteo for outdoor activities missing weather data.
+    Uses archive API for older data, forecast API for recent activities."""
     import requests as req
-    cutoff = date.today() - timedelta(days=2)   # Open-Meteo archive requires >2 days ago
+    archive_cutoff = date.today() - timedelta(days=ARCHIVE_CUTOFF_DAYS)
     placeholders = ','.join(['%s'] * len(OUTDOOR_TYPES))
     with conn.cursor() as cur:
         cur.execute(f"""
@@ -481,26 +497,20 @@ def fetch_weather_for_activities(conn):
             FROM activities
             WHERE start_lat IS NOT NULL
               AND weather_data IS NULL
-              AND start_time::date <= %s
               AND activity_type IN ({placeholders})
             ORDER BY start_time DESC
             LIMIT 20
-        """, (cutoff, *OUTDOOR_TYPES))
+        """, OUTDOOR_TYPES)
         rows = cur.fetchall()
     if not rows:
         return
     updated = 0
     for row in rows:
         try:
-            ds = str(row[1])
-            url = (
-                f"https://archive-api.open-meteo.com/v1/archive"
-                f"?latitude={row[2]:.4f}&longitude={row[3]:.4f}"
-                f"&start_date={ds}&end_date={ds}"
-                f"&hourly=temperature_2m,precipitation,wind_speed_10m,"
-                f"wind_direction_10m,weather_code,relative_humidity_2m"
-                f"&timezone=auto"
-            )
+            act_date = row[1]
+            ds = str(act_date)
+            use_archive = act_date <= archive_cutoff
+            url = _weather_url(row[2], row[3], ds, use_archive)
             resp = req.get(url, timeout=15)
             if resp.status_code == 200:
                 data = resp.json().get("hourly", {})
@@ -511,6 +521,9 @@ def fetch_weather_for_activities(conn):
                     )
                 conn.commit()
                 updated += 1
+            elif resp.status_code == 400 and not use_archive:
+                # Forecast API may reject dates too far in the past — skip silently
+                pass
             time.sleep(0.3)
         except Exception as e:
             log.warning(f"Weather fetch failed for activity {row[0]}: {e}")
