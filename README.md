@@ -4,10 +4,11 @@ Self-hosted Garmin health data pipeline and dashboard. Pulls your entire Garmin 
 
 **What you get:**
 - Daily stats: steps, calories, stress, body battery, SpO2, resting HR
-- Sleep: duration, stages (light/deep/REM), sleep score
+- Sleep: duration, stages (light/deep/REM), sleep score, respiration
 - HRV trends and status
-- All activities with GPS route maps, speed-colored polylines, and personal bests
-- Rolling averages, training load, sleep debt, and more
+- All activities with GPS route maps, speed/temperature/wind-colored polylines, personal bests
+- Touring mode: multi-day trip view with weather overlay, country crossings, sleep locations
+- Multi-user: each user has isolated data and manages their own Garmin credentials
 
 ---
 
@@ -24,17 +25,14 @@ Self-hosted Garmin health data pipeline and dashboard. Pulls your entire Garmin 
 garmin-dashboard/
 ├── docker-compose.yml       ← all 4 services (db, sync, api, frontend)
 ├── .env.example             ← copy to .env and fill in credentials
-├── garmin_login.py          ← run once to generate OAuth tokens
 ├── db/
 │   └── init.sql             ← database schema (auto-applied on first start)
 ├── sync/
 │   ├── sync.py              ← main sync loop (runs hourly)
-│   ├── db.py                ← database helpers
-│   ├── backfill_all.py      ← one-shot recovery script (run manually if needed)
-│   ├── fetch_polylines.py   ← utility: fetch GPS polylines for all activities
-│   └── resync_gps.py        ← utility: re-fetch all activity coordinates
+│   └── db.py                ← database helpers
 ├── api/
 │   ├── main.py              ← FastAPI REST backend
+│   ├── auth.py              ← JWT, bcrypt, Fernet encryption helpers
 │   └── db.py                ← database helpers
 └── frontend/
     └── src/
@@ -63,38 +61,78 @@ cp .env.example .env
 ```
 
 Edit `.env` and fill in:
-- `GARMIN_EMAIL` and `GARMIN_PASSWORD` — your Garmin Connect credentials
-- `POSTGRES_PASSWORD` — any password you choose for the local database
 
-### 3. Generate Garmin auth tokens
+| Variable | Description |
+|----------|-------------|
+| `SECRET_KEY` | Encryption key for credentials and JWT tokens — **required** |
+| `POSTGRES_PASSWORD` | Any password for the local database |
+| `GARMIN_EMAIL` / `GARMIN_PASSWORD` | Optional — only needed for initial single-user migration |
 
-Garmin uses OAuth. Run this once to save tokens to disk (avoids storing your password long-term):
+Generate a `SECRET_KEY`:
 
 ```bash
-python garmin_login.py
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-This creates a `garth_tokens/` directory. After this you can clear `GARMIN_PASSWORD` from your `.env` if you want — the sync service will use the saved tokens.
-
-### 4. Start everything
+### 3. Start everything
 
 ```bash
 docker compose up -d --build
 ```
 
-On **first run**, the sync service automatically backfills up to 10 years of Garmin history. This takes a while — watch progress with:
+On **first run** the sync service:
+1. Creates the database schema
+2. Creates a default admin account (`admin` / `admin`) — **change this immediately**
+3. Migrates any `GARMIN_EMAIL`/`GARMIN_PASSWORD` env vars to encrypted DB credentials
+4. Begins backfilling up to 10 years of Garmin history
+
+Watch progress:
 
 ```bash
 docker compose logs -f sync
 ```
 
-On subsequent runs it syncs incrementally (last 7 days + any historical gaps, every hour).
-
-### 5. Open the dashboard
+### 4. Open the dashboard
 
 ```
 http://localhost:3000
 ```
+
+Log in with `admin` / `admin`.
+
+### 5. First-login checklist
+
+1. **Change the admin password** — user menu (top right) → Settings → Change Password
+2. **Set Garmin credentials** — user menu → Settings → Garmin Credentials
+   - Credentials are stored encrypted and cannot be read back — only the sync service uses them
+3. **Remove `GARMIN_EMAIL`/`GARMIN_PASSWORD`** from `.env` once saved (no longer needed)
+4. **Restart sync** to pick up the credentials immediately:
+   ```bash
+   docker compose restart sync
+   ```
+
+---
+
+## User management
+
+Admins can create and delete users via user menu → Manage users.
+
+Each user:
+- Has completely isolated data (activities, sleep, HRV, tours)
+- Sets their own Garmin credentials via Settings — no one else can read them back
+- Can change their own password
+
+---
+
+## Updating
+
+```bash
+git pull
+docker compose build
+docker compose up -d
+```
+
+The sync service runs `ensure_schema()` on startup and handles any database migrations automatically.
 
 ---
 
@@ -105,8 +143,10 @@ docker compose exec db psql -U garmin -d garmin
 ```
 
 ```sql
--- Activity count and date range
-SELECT MIN(start_time::date), MAX(start_time::date), COUNT(*) FROM activities;
+-- Activity count and date range per user
+SELECT u.username, MIN(a.start_time::date), MAX(a.start_time::date), COUNT(*)
+FROM activities a JOIN users u ON u.id = a.user_id
+GROUP BY u.username;
 
 -- Recent daily stats
 SELECT date, steps, resting_hr, body_battery_high FROM daily_summary ORDER BY date DESC LIMIT 7;
@@ -121,35 +161,42 @@ SELECT date, sleep_score, round(duration_seconds/3600.0, 1) AS hours FROM sleep 
 
 The REST API runs on port 8000. Interactive docs: `http://localhost:8000/docs`
 
+All data endpoints require a Bearer token obtained from `POST /auth/login`.
+
+**Auth**
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | DB connectivity check |
+| POST | `/auth/login` | Login — returns JWT token |
+| GET | `/auth/me` | Current user info |
+| PUT | `/auth/me/password` | Change password |
+| PUT | `/auth/me/garmin` | Set Garmin credentials (write-only) |
+
+**Data** (all require auth, scoped to the authenticated user)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
 | GET | `/api/range` | Earliest and latest dates in DB |
 | GET | `/api/daily` | Daily summary (steps, HR, stress, body battery, SpO2) |
 | GET | `/api/sleep` | Sleep data (duration, stages, score) |
 | GET | `/api/hrv` | HRV data |
-| GET | `/api/activities` | Workouts (filter by `activity_type`) |
-| GET | `/api/activities/map` | Activities with GPS polylines for map view |
+| GET | `/api/activities` | Workouts |
+| GET | `/api/activities/map` | Activities with GPS polylines |
+| GET | `/api/activities/countries` | Stats grouped by country |
 | GET | `/api/summary` | 7-day and 30-day aggregated stats |
+| GET | `/api/touring` | Touring activities with weather and country crossings |
+| GET/POST | `/api/tours` | Named tours (multi-day trips) |
+| GET/PUT/DELETE | `/api/tours/{id}` | Tour detail, update, delete |
 
-All endpoints accept optional `start` and `end` query params (`YYYY-MM-DD`). Default range is the last 30 days.
+**Admin** (require admin role)
 
----
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/admin/users` | List all users |
+| POST | `/api/admin/users` | Create user |
+| DELETE | `/api/admin/users/{id}` | Delete user and all their data |
 
-## Recovery utilities
-
-If activities or GPS routes are missing, run the full backfill script:
-
-```bash
-docker compose exec sync python backfill_all.py
-```
-
-This runs in 3 phases:
-1. Syncs any historical data not yet in the DB
-2. Re-fetches activity metadata for outdoor activities missing GPS coordinates
-3. Fetches GPS polylines for all activities that have coordinates but no route
-
-The regular sync also self-heals: every hour it checks for missing coordinates and polylines and fills them in automatically.
+All data endpoints accept optional `start` and `end` query params (`YYYY-MM-DD`).
 
 ---
 
