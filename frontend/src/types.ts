@@ -1,3 +1,15 @@
+export interface User {
+  id: number
+  username: string
+  is_admin: boolean
+  has_garmin: boolean
+}
+
+export interface AdminUser extends User {
+  created_at: string
+  activity_count: number
+}
+
 export interface DataRange {
   earliest: string | null
   latest: string | null

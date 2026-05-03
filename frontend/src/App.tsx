@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { fetchDaily, fetchSleep, fetchHrv, fetchActivities, fetchSummary, fetchRange } from './api'
-import type { DailyRow, SleepRow, HrvRow, Activity, Summary, DataRange } from './types'
+import { fetchDaily, fetchSleep, fetchHrv, fetchActivities, fetchSummary, fetchRange, fetchMe, clearToken, getToken } from './api'
+import type { DailyRow, SleepRow, HrvRow, Activity, Summary, DataRange, User } from './types'
 
+import LoginPage from './components/LoginPage'
+import SettingsPanel from './components/SettingsPanel'
+import AdminPanel from './components/AdminPanel'
 import SummaryCards from './components/SummaryCards'
 import BodyBatteryChart from './components/BodyBatteryChart'
 import BodyBatteryDeltaChart from './components/BodyBatteryDeltaChart'
@@ -66,7 +69,14 @@ function Spinner() {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
+type View = 'dashboard' | 'settings' | 'admin'
+
 export default function App() {
+  const [user, setUser]   = useState<User | null>(null)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [view, setView]   = useState<View>('dashboard')
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+
   const [tab, setTab] = useState<Tab>('Overview')
   const [rangeLabel, setRangeLabel] = useState<RangeLabel | null>('30d')
   const [customStart, setCustomStart] = useState<string | null>(null)
@@ -83,10 +93,18 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Fetch the DB bounds once on mount
+  // Check existing token on mount
   useEffect(() => {
-    fetchRange().then(setDataRange).catch(() => {})
+    if (!getToken()) { setAuthChecked(true); return }
+    fetchMe()
+      .then(me => { setUser(me); setAuthChecked(true) })
+      .catch(() => { clearToken(); setAuthChecked(true) })
   }, [])
+
+  // Fetch the DB bounds once on login
+  useEffect(() => {
+    if (user) fetchRange().then(setDataRange).catch(() => {})
+  }, [user])
 
   // Derive start/end — custom dates take priority over presets
   const { start, end } = (() => {
@@ -98,6 +116,7 @@ export default function App() {
   })()
 
   const load = useCallback(() => {
+    if (!user) return
     setLoading(true)
     setError(null)
     Promise.all([
@@ -116,14 +135,47 @@ export default function App() {
       })
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false))
-  }, [start, end])
+  }, [start, end, user])
 
   useEffect(() => { load() }, [load])
+
+  function handleLogout() {
+    clearToken()
+    setUser(null)
+    setUserMenuOpen(false)
+    setView('dashboard')
+  }
+
+  // ── Auth gate ───────────────────────────────────────────────────────────────
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-slate-600 border-t-blue-400 rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <LoginPage onLogin={() => fetchMe().then(me => setUser(me))} />
+  }
+
+  // ── Settings / Admin views ─────────────────────────────────────────────────
+
+  if (view === 'settings') {
+    return <SettingsPanel username={user.username} onBack={() => setView('dashboard')} />
+  }
+
+  if (view === 'admin' && user.is_admin) {
+    return <AdminPanel onBack={() => setView('dashboard')} />
+  }
+
+  // ── Dashboard ──────────────────────────────────────────────────────────────
 
   const dateLabel = `${start} → ${end}  (${daily.length} days)`
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-slate-950" onClick={() => setUserMenuOpen(false)}>
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/95 backdrop-blur px-6 py-3 flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-3 mr-auto">
@@ -155,6 +207,61 @@ export default function App() {
           {customStart && customEnd && (
             <div className="px-3 py-1 rounded-md text-sm font-medium bg-blue-600 text-white">
               {customStart.slice(5)} – {customEnd.slice(5)}
+            </div>
+          )}
+        </div>
+
+        {/* User menu */}
+        <div className="relative" onClick={e => e.stopPropagation()}>
+          <button
+            onClick={() => setUserMenuOpen(v => !v)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors text-sm text-slate-200"
+          >
+            <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            </svg>
+            <span>{user.username}</span>
+            {user.is_admin && (
+              <span className="text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded px-1.5">admin</span>
+            )}
+          </button>
+          {userMenuOpen && (
+            <div className="absolute right-0 mt-1 w-44 bg-slate-800 border border-slate-700 rounded-xl shadow-xl overflow-hidden z-50">
+              <button
+                onClick={() => { setView('settings'); setUserMenuOpen(false) }}
+                className="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-2 transition-colors"
+              >
+                <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Settings
+              </button>
+              {user.is_admin && (
+                <button
+                  onClick={() => { setView('admin'); setUserMenuOpen(false) }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700 flex items-center gap-2 transition-colors"
+                >
+                  <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                  </svg>
+                  Manage users
+                </button>
+              )}
+              <div className="border-t border-slate-700" />
+              <button
+                onClick={handleLogout}
+                className="w-full text-left px-4 py-2.5 text-sm text-red-400 hover:bg-slate-700 flex items-center gap-2 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                Sign out
+              </button>
             </div>
           )}
         </div>
