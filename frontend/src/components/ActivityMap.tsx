@@ -198,7 +198,6 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
   const [era5On,        setEra5On]        = useState(false)
   const [radarOn,       setRadarOn]       = useState(false)
   const [radarTsIdx,    setRadarTsIdx]    = useState(0)
-  const [era5Range,     setEra5Range]     = useState<{ min: number; max: number } | null>(null)
   const [weatherLoading, setWeatherLoading] = useState(false)
 
   useEffect(() => {
@@ -215,7 +214,7 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
   // Fetch weather data whenever selected activity changes
   useEffect(() => {
     if (selectedId == null) {
-      setGridPoints([]); setRadarTs([]); setEra5On(false); setRadarOn(false); setEra5Range(null)
+      setGridPoints([]); setRadarTs([]); setEra5On(false); setRadarOn(false)
       return
     }
     setWeatherLoading(true)
@@ -274,6 +273,18 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
 
   const selectedActivity = useMemo(() => data.find(a => a.activity_id === selectedId) ?? null, [data, selectedId])
   const era5Date = selectedActivity ? selectedActivity.start_time.slice(0, 10) : undefined
+
+  // Compute fixed normalization range from ALL hours so colors stay consistent as hour changes
+  const era5Range = useMemo(() => {
+    if (!gridPoints.length) return null
+    const field = era5Variable === 'temperature' ? 'temperature_2m'
+                : era5Variable === 'precipitation' ? 'precipitation' : 'wind_speed_10m'
+    const vals = gridPoints
+      .map(p => p[field as keyof WeatherGridPoint] as number | null)
+      .filter((v): v is number => v != null)
+    if (!vals.length) return null
+    return { min: Math.min(...vals), max: Math.max(...vals) }
+  }, [gridPoints, era5Variable])
 
   const hasAnyRoute = visible.some(a => (a.polyline?.length ?? 0) > 2)
   const isCustom    = fetched.start !== defaultStart || fetched.end !== defaultEnd
@@ -347,7 +358,7 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
             {era5On && gridPoints.length > 0 && (
               <WeatherGridLayer
                 points={gridPoints} variable={era5Variable} hour={era5Hour} date={era5Date}
-                onRangeComputed={(min, max) => setEra5Range({ min, max })}
+                dataMin={era5Range?.min} dataMax={era5Range?.max}
               />
             )}
             {radarOn && radarTs.length > 0 && (

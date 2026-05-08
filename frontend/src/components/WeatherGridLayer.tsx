@@ -11,7 +11,9 @@ interface Props {
   hour: number
   date?: string
   opacity?: number
-  onRangeComputed?: (min: number, max: number) => void
+  /** Fixed normalization range — computed from the full dataset so colors stay consistent across hours */
+  dataMin?: number
+  dataMax?: number
 }
 
 // ─── Color scales (t is normalized 0–1 from actual data min/max) ─────────────
@@ -68,8 +70,10 @@ function renderToDataURL(
   variable: WeatherVariable,
   hour: number,
   date: string | undefined,
+  dataMin: number | undefined,
+  dataMax: number | undefined,
   resolution = 256,
-): { dataUrl: string; bounds: L.LatLngBoundsExpression; min: number; max: number } | null {
+): { dataUrl: string; bounds: L.LatLngBoundsExpression } | null {
   const field = variable === 'temperature' ? 'temperature_2m'
               : variable === 'precipitation' ? 'precipitation'
               : 'wind_speed_10m'
@@ -82,13 +86,18 @@ function renderToDataURL(
   const lngs = [...new Set(filtered.map(p => p.lng))].sort((a, b) => a - b)
   if (lats.length < 2 || lngs.length < 2) return null
 
-  const rawValues = filtered
-    .map(p => p[field as keyof WeatherGridPoint] as number | null)
-    .filter((v): v is number => v != null)
-  if (!rawValues.length) return null
-  const dataMin = Math.min(...rawValues)
-  const dataMax = Math.max(...rawValues)
-  const range = dataMax - dataMin || 1
+  // Use caller-supplied range (full dataset) so colors are consistent across hours.
+  // Fall back to computing from the filtered slice only if not provided.
+  let min = dataMin, max = dataMax
+  if (min == null || max == null) {
+    const rawValues = filtered
+      .map(p => p[field as keyof WeatherGridPoint] as number | null)
+      .filter((v): v is number => v != null)
+    if (!rawValues.length) return null
+    min = Math.min(...rawValues)
+    max = Math.max(...rawValues)
+  }
+  const range = (max - min) || 1
 
   const lookup = new Map<string, number>()
   for (const p of filtered) {
@@ -112,7 +121,7 @@ function renderToDataURL(
       const val = bilinear(lats, lngs, lookup, lat, lng)
       if (val == null) continue
       if (variable === 'precipitation' && val <= 0.05) continue
-      const t = Math.max(0, Math.min(1, (val - dataMin) / range))
+      const t = Math.max(0, Math.min(1, (val - min!) / range))
       const [r, g, b] = valueToColor(t, variable)
       const idx = (py * resolution + px) * 4
       img.data[idx]     = r
@@ -126,25 +135,22 @@ function renderToDataURL(
   return {
     dataUrl: canvas.toDataURL('image/png'),
     bounds:  [[minLat, minLng], [maxLat, maxLng]],
-    min: dataMin,
-    max: dataMax,
   }
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function WeatherGridLayer({ points, variable, hour, date, opacity = 1, onRangeComputed }: Props) {
+export default function WeatherGridLayer({ points, variable, hour, date, opacity = 1, dataMin, dataMax }: Props) {
   const map     = useMap()
   const overlay = useRef<L.ImageOverlay | null>(null)
 
   useEffect(() => {
-    const result = renderToDataURL(points, variable, hour, date)
+    const result = renderToDataURL(points, variable, hour, date, dataMin, dataMax)
     if (!result) {
       overlay.current?.remove()
       overlay.current = null
       return
     }
-    onRangeComputed?.(result.min, result.max)
     if (overlay.current) {
       overlay.current.setUrl(result.dataUrl)
       overlay.current.setBounds(result.bounds as L.LatLngBounds)
@@ -160,7 +166,7 @@ export default function WeatherGridLayer({ points, variable, hour, date, opacity
       overlay.current?.remove()
       overlay.current = null
     }
-  }, [map, points, variable, hour, date, opacity])
+  }, [map, points, variable, hour, date, opacity, dataMin, dataMax])
 
   return null
 }

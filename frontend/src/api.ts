@@ -156,17 +156,11 @@ export function fetchRadarTimestamps(activityId: number): Promise<{ timestamps: 
   return get(`/api/activities/${activityId}/radar-timestamps`)
 }
 
-export async function fetchWeatherGridForActivities(ids: number[]): Promise<import('./types').WeatherGridPoint[]> {
-  const results = await Promise.all(
-    ids.map(id => fetchWeatherGrid(id).catch(() => ({ points: [] as import('./types').WeatherGridPoint[] })))
+export function fetchWeatherGridRegion(
+  minLat: number, maxLat: number, minLng: number, maxLng: number,
+  startDate: string, endDate: string,
+): Promise<{ points: import('./types').WeatherGridPoint[] }> {
+  return get(
+    `/api/weather-grid?min_lat=${minLat}&max_lat=${maxLat}&min_lng=${minLng}&max_lng=${maxLng}&start_date=${startDate}&end_date=${endDate}`
   )
-  const seen = new Set<string>()
-  const merged: import('./types').WeatherGridPoint[] = []
-  for (const r of results) {
-    for (const p of r.points) {
-      const key = `${p.lat},${p.lng},${p.date},${p.hour}`
-      if (!seen.has(key)) { seen.add(key); merged.push(p) }
-    }
-  }
-  return merged
 }

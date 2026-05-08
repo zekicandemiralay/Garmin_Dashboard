@@ -620,6 +620,27 @@ def delete_tour(tour_id: int, user: dict = Depends(get_current_user)):
 
 # ─── Weather ──────────────────────────────────────────────────────────────────
 
+@app.get("/api/weather-grid")
+def get_weather_grid_region(
+    min_lat: float, max_lat: float, min_lng: float, max_lng: float,
+    start_date: str, end_date: str,
+    user: dict = Depends(get_current_user),
+):
+    """Return ERA5 grid points for a bounding box and date range (used by touring)."""
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT lat, lng, date::text AS date, hour, temperature_2m, precipitation,
+                   wind_speed_10m, wind_direction_10m
+            FROM weather_grid_points
+            WHERE date BETWEEN %s AND %s
+              AND lat  BETWEEN %s AND %s
+              AND lng  BETWEEN %s AND %s
+            ORDER BY date, lat, lng, hour
+        """, (start_date, end_date, min_lat, max_lat, min_lng, max_lng))
+        rows = cur.fetchall()
+    return {"points": rows}
+
+
 @app.get("/api/activities/{activity_id}/weather-grid")
 def get_weather_grid(activity_id: int, user: dict = Depends(get_current_user)):
     """Return shared ERA5 grid points covering the activity's bounding box and date."""

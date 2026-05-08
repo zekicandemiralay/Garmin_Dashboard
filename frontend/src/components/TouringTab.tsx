@@ -5,7 +5,7 @@ import {
   fetchTouringData, fetchActivities, fetchTours,
   createTour as apiCreateTour, fetchTourDetail,
   updateTour as apiUpdateTour, deleteTour as apiDeleteTour,
-  fetchWeatherGridForActivities,
+  fetchWeatherGridRegion,
 } from '../api'
 import type { TouringActivity, TouringData, WeatherHourly, TourSummary, TourDetail, WeatherGridPoint } from '../types'
 import type { Activity } from '../types'
@@ -417,7 +417,6 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
   const [era5Points, setEra5Points] = useState<WeatherGridPoint[]>([])
   const [era5Variable, setEra5Variable] = useState<WeatherVariable>('temperature')
   const [era5Loading, setEra5Loading] = useState(false)
-  const [era5Range, setEra5Range] = useState<{ min: number; max: number } | null>(null)
 
   const fitKey = useMemo(() => activities.map(a => a.activity_id).join(','), [activities])
 
@@ -487,12 +486,21 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
     }).filter(Boolean) as { lat: number; lng: number; date: string; score: number | null; hours: number | null }[]
   }, [activities, sleep])
 
-  // Fetch ERA5 grid for all activities the first time the layer is toggled on
+  // Fetch ERA5 for the entire tour as a single rectangular query (min/max lat-lng of all activities)
   useEffect(() => {
     if (!era5On || era5Points.length > 0) return
+    const allLats: number[] = [], allLngs: number[] = []
+    for (const a of activities) {
+      for (const pt of a.polyline ?? []) { allLats.push(pt[0]); allLngs.push(pt[1]) }
+      if (a.start_lat != null) { allLats.push(a.start_lat); allLngs.push(a.start_lng) }
+    }
+    if (!allLats.length) return
+    const minLat = Math.min(...allLats), maxLat = Math.max(...allLats)
+    const minLng = Math.min(...allLngs), maxLng = Math.max(...allLngs)
+    const dates = activities.map(a => a.start_time.slice(0, 10)).sort()
     setEra5Loading(true)
-    fetchWeatherGridForActivities(activities.map(a => a.activity_id))
-      .then(pts => setEra5Points(pts))
+    fetchWeatherGridRegion(minLat, maxLat, minLng, maxLng, dates[0], dates[dates.length - 1])
+      .then(r => setEra5Points(r.points))
       .catch(() => {})
       .finally(() => setEra5Loading(false))
   }, [era5On, activities])
@@ -500,13 +508,24 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
   // Reset ERA5 data when activities change (different tour/period)
   useEffect(() => {
     setEra5Points([])
-    setEra5Range(null)
     setEra5On(false)
   }, [activities])
 
   // Date + hour for ERA5 layer derived from the timeline slider position
   const era5Date = new Date(currentMs).toISOString().slice(0, 10)
   const era5Hour = new Date(currentMs).getUTCHours()
+
+  // Fixed normalization range from the full dataset so colors stay consistent as date/hour changes
+  const era5Range = useMemo(() => {
+    if (!era5Points.length) return null
+    const field = era5Variable === 'temperature' ? 'temperature_2m'
+                : era5Variable === 'precipitation' ? 'precipitation' : 'wind_speed_10m'
+    const vals = era5Points
+      .map(p => p[field as keyof WeatherGridPoint] as number | null)
+      .filter((v): v is number => v != null)
+    if (!vals.length) return null
+    return { min: Math.min(...vals), max: Math.max(...vals) }
+  }, [era5Points, era5Variable])
 
   const totalStats = useMemo(() => ({
     distance: activities.reduce((s, a) => s + (a.distance_meters ?? 0), 0),
@@ -552,7 +571,7 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
             {era5On && era5Points.length > 0 && (
               <WeatherGridLayer
                 points={era5Points} variable={era5Variable} hour={era5Hour} date={era5Date}
-                onRangeComputed={(min, max) => setEra5Range({ min, max })}
+                dataMin={era5Range?.min} dataMax={era5Range?.max}
               />
             )}
             {activities.map(a => (
