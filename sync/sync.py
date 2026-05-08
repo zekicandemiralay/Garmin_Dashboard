@@ -806,7 +806,7 @@ def _radar_loop():
                 time.sleep(RADAR_INTERVAL)
                 continue
 
-            activities = db.get_recent_activities_for_radar(conn, hours=wx.RADAR_WINDOW_HOURS)
+            activities = db.get_recent_activities_for_radar(conn, sync_window_hours=wx.RADAR_WINDOW_HOURS)
             if not activities:
                 conn.close()
                 time.sleep(RADAR_INTERVAL)
