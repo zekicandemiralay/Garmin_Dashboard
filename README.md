@@ -7,7 +7,7 @@ Self-hosted Garmin health data pipeline and dashboard. Pulls your entire Garmin 
 - Sleep: duration, stages (light/deep/REM), sleep score, respiration
 - HRV trends and status
 - All activities with GPS route maps, speed/temperature/wind-colored polylines, personal bests
-- Touring mode: multi-day trip view with weather overlay, country crossings, sleep locations
+- Touring mode: multi-day trip view with weather overlay, country crossings, sleep locations on map
 - Multi-user: each user has isolated data and manages their own Garmin credentials
 
 ---
@@ -24,7 +24,7 @@ Self-hosted Garmin health data pipeline and dashboard. Pulls your entire Garmin 
 ```
 garmin-dashboard/
 ├── docker-compose.yml       ← all 4 services (db, sync, api, frontend)
-├── .env.example             ← copy to .env and fill in credentials
+├── .env.example             ← copy to .env and fill in values
 ├── db/
 │   └── init.sql             ← database schema (auto-applied on first start)
 ├── sync/
@@ -32,7 +32,7 @@ garmin-dashboard/
 │   └── db.py                ← database helpers
 ├── api/
 │   ├── main.py              ← FastAPI REST backend
-│   ├── auth.py              ← JWT, bcrypt, Fernet encryption helpers
+│   ├── auth.py              ← JWT, bcrypt, Fernet encryption
 │   └── db.py                ← database helpers
 └── frontend/
     └── src/
@@ -60,19 +60,20 @@ cd Garmin_Dashboard
 cp .env.example .env
 ```
 
-Edit `.env` and fill in:
+Open `.env` and set:
 
 | Variable | Description |
 |----------|-------------|
 | `SECRET_KEY` | Encryption key for credentials and JWT tokens — **required** |
 | `POSTGRES_PASSWORD` | Any password for the local database |
-| `GARMIN_EMAIL` / `GARMIN_PASSWORD` | Optional — only needed for initial single-user migration |
 
 Generate a `SECRET_KEY`:
 
 ```bash
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
+
+That's all that's required. Garmin credentials are set per-user through the dashboard UI after first login — no `.env` entries needed.
 
 ### 3. Start everything
 
@@ -82,34 +83,44 @@ docker compose up -d --build
 
 On **first run** the sync service:
 1. Creates the database schema
-2. Creates a default admin account (`admin` / `admin`) — **change this immediately**
-3. Migrates any `GARMIN_EMAIL`/`GARMIN_PASSWORD` env vars to encrypted DB credentials
-4. Begins backfilling up to 10 years of Garmin history
+2. Creates a default admin account (`admin` / `admin`) — **change this immediately after login**
+3. Waits for Garmin credentials to be set via the dashboard
 
-Watch progress:
+Watch the logs:
 
 ```bash
 docker compose logs -f sync
 ```
 
-### 4. Open the dashboard
+### 4. Open the dashboard and finish setup
 
 ```
 http://localhost:3000
 ```
 
-Log in with `admin` / `admin`.
-
-### 5. First-login checklist
+Log in with `admin` / `admin`, then:
 
 1. **Change the admin password** — user menu (top right) → Settings → Change Password
-2. **Set Garmin credentials** — user menu → Settings → Garmin Credentials
-   - Credentials are stored encrypted and cannot be read back — only the sync service uses them
-3. **Remove `GARMIN_EMAIL`/`GARMIN_PASSWORD`** from `.env` once saved (no longer needed)
-4. **Restart sync** to pick up the credentials immediately:
+2. **Set your Garmin credentials** — user menu → Settings → Garmin Credentials
+   - Stored encrypted; cannot be read back by anyone, including admins
+3. **Restart sync** to start the backfill immediately:
    ```bash
    docker compose restart sync
    ```
+
+The sync service will backfill up to 10 years of Garmin history on first run. Subsequent runs sync incrementally (last 7 days + any gaps, every hour).
+
+---
+
+## MFA accounts
+
+If your Garmin account has two-factor authentication enabled, the sync service cannot complete the interactive login automatically. Run this once on the host to pre-generate OAuth tokens:
+
+```bash
+python3 garmin_login.py
+```
+
+This saves tokens to `garth_tokens/` which is mounted into the sync container. After that, the sync service uses the cached tokens and MFA is not prompted again until they expire.
 
 ---
 
@@ -132,7 +143,7 @@ docker compose build
 docker compose up -d
 ```
 
-The sync service runs `ensure_schema()` on startup and handles any database migrations automatically.
+The sync service runs schema migrations automatically on startup — no manual steps needed.
 
 ---
 
@@ -172,7 +183,7 @@ All data endpoints require a Bearer token obtained from `POST /auth/login`.
 | PUT | `/auth/me/password` | Change password |
 | PUT | `/auth/me/garmin` | Set Garmin credentials (write-only) |
 
-**Data** (all require auth, scoped to the authenticated user)
+**Data** (scoped to the authenticated user)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -188,7 +199,7 @@ All data endpoints require a Bearer token obtained from `POST /auth/login`.
 | GET/POST | `/api/tours` | Named tours (multi-day trips) |
 | GET/PUT/DELETE | `/api/tours/{id}` | Tour detail, update, delete |
 
-**Admin** (require admin role)
+**Admin**
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
