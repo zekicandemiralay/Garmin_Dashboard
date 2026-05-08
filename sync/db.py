@@ -243,18 +243,23 @@ def get_activities_needing_era5(conn, limit: int = 8) -> list[dict]:
     return [{"activity_id": r[0], "user_id": r[1], "date": r[2], "polyline": r[3]} for r in rows]
 
 
-def get_recent_activities_for_radar(conn, hours: float = 2.5) -> list[dict]:
-    """Recent activities whose radar hasn't been attempted (cross-user)."""
+def get_recent_activities_for_radar(conn, sync_window_hours: float = 3.0) -> list[dict]:
+    """Activities added to the DB recently whose radar hasn't been attempted.
+
+    Filters on created_at (when we received the data from Garmin) rather than
+    start_time, so late-syncing activities still get a radar check.
+    The frame-matching logic in weather.py handles the actual time overlap check.
+    """
     from datetime import datetime, timezone, timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=sync_window_hours)
     with conn.cursor() as cur:
         cur.execute("""
             SELECT activity_id, user_id, start_time, duration_seconds, polyline
             FROM activities
-            WHERE start_time >= %s
+            WHERE created_at >= %s
               AND polyline IS NOT NULL
               AND (radar_timestamps IS NULL OR cardinality(radar_timestamps) = 0)
-            ORDER BY start_time DESC
+            ORDER BY created_at DESC
             LIMIT 100
         """, (cutoff,))
         rows = cur.fetchall()
