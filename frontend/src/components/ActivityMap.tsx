@@ -1,8 +1,10 @@
 import { useEffect, useState, Fragment } from 'react'
 import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
-import type { MapActivity } from '../types'
-import { fetchMapActivities } from '../api'
+import type { MapActivity, WeatherGridPoint } from '../types'
+import { fetchMapActivities, fetchWeatherGrid, fetchRadarTimestamps } from '../api'
+import WeatherGridLayer, { WeatherGridLegend } from './WeatherGridLayer'
+import type { WeatherVariable } from './WeatherGridLayer'
 
 // SVG pin icons for start (green) and end (red)
 function makePin(fill: string, border: string) {
@@ -115,6 +117,19 @@ function fmtSpeed(a: MapActivity) {
   return `${((a.distance_meters / a.duration_seconds) * 3.6).toFixed(1)} km/h`
 }
 
+function RadarTileLayer({ timestamp }: { timestamp: number }) {
+  const token = localStorage.getItem('token') || ''
+  return (
+    <TileLayer
+      key={timestamp}
+      url={`/api/radar/${timestamp}/{z}/{x}/{y}?t=${token}`}
+      opacity={0.65}
+      tileSize={512}
+      zoomOffset={-1}
+    />
+  )
+}
+
 function ActivityPopup({ a }: { a: MapActivity }) {
   const startDate = new Date(a.start_time)
   const endDate   = a.duration_seconds ? new Date(startDate.getTime() + a.duration_seconds * 1000) : null
@@ -175,6 +190,16 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [typeFilter, setTypeFilter] = useState<string>('All')
 
+  // Weather layer state — tied to selected activity
+  const [gridPoints,    setGridPoints]    = useState<WeatherGridPoint[]>([])
+  const [radarTs,       setRadarTs]       = useState<number[]>([])
+  const [era5Variable,  setEra5Variable]  = useState<WeatherVariable>('temperature')
+  const [era5Hour,      setEra5Hour]      = useState<number>(12)
+  const [era5On,        setEra5On]        = useState(false)
+  const [radarOn,       setRadarOn]       = useState(false)
+  const [radarTsIdx,    setRadarTsIdx]    = useState(0)
+  const [weatherLoading, setWeatherLoading] = useState(false)
+
   useEffect(() => {
     setRangeStart(defaultStart)
     setRangeEnd(defaultEnd)
@@ -185,6 +210,40 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
   useEffect(() => {
     if (highlightedId != null) setSelectedId(highlightedId)
   }, [highlightedId])
+
+  // Fetch weather data whenever selected activity changes
+  useEffect(() => {
+    if (selectedId == null) {
+      setGridPoints([]); setRadarTs([]); setEra5On(false); setRadarOn(false)
+      return
+    }
+    setWeatherLoading(true)
+    const sel = data.find(a => a.activity_id === selectedId)
+    if (sel?.start_time) {
+      const startHour = new Date(sel.start_time).getUTCHours()
+      setEra5Hour(startHour)
+    }
+    Promise.all([
+      fetchWeatherGrid(selectedId).catch(() => ({ points: [] })),
+      fetchRadarTimestamps(selectedId).catch(() => ({ timestamps: [], zoom: 6 })),
+    ]).then(([grid, radar]) => {
+      setGridPoints(grid.points)
+      setRadarTs(radar.timestamps)
+      if (radar.timestamps.length > 0) {
+        // Pick frame closest to activity start
+        const sel = data.find(a => a.activity_id === selectedId)
+        if (sel) {
+          const startUnix = new Date(sel.start_time).getTime() / 1000
+          let best = 0, bestDiff = Infinity
+          radar.timestamps.forEach((ts, i) => {
+            const d = Math.abs(ts - startUnix)
+            if (d < bestDiff) { bestDiff = d; best = i }
+          })
+          setRadarTsIdx(best)
+        }
+      }
+    }).finally(() => setWeatherLoading(false))
+  }, [selectedId])
 
   useEffect(() => {
     setLoading(true)
@@ -281,6 +340,12 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
             />
             {allPts.length > 0 && <AutoFit pts={allPts} />}
             <DeselectOnMapClick onDeselect={() => setSelectedId(null)} />
+            {era5On && gridPoints.length > 0 && (
+              <WeatherGridLayer points={gridPoints} variable={era5Variable} hour={era5Hour} />
+            )}
+            {radarOn && radarTs.length > 0 && (
+              <RadarTileLayer timestamp={radarTs[radarTsIdx]} />
+            )}
 
             {sorted.map(a => {
               const isSelected = a.activity_id === selectedId
@@ -331,7 +396,7 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
         </div>
       )}
 
-      {/* Legend */}
+      {/* Speed legend */}
       {located.length > 0 && (
         <div className="flex flex-wrap items-center gap-4 mt-3">
           <div className="flex items-center gap-1.5">
@@ -353,6 +418,85 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
               <span className="text-xs text-slate-500">fast</span>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Weather panel — shown when an activity is selected */}
+      {selectedId != null && (
+        <div className="mt-4 border-t border-slate-700 pt-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-slate-300">Weather layers</span>
+            {weatherLoading && <span className="text-xs text-slate-500">Loading…</span>}
+          </div>
+
+          {/* ERA5 grid row */}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setEra5On(v => !v)}
+              disabled={gridPoints.length === 0}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                era5On && gridPoints.length > 0
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-40'
+              }`}
+            >
+              ERA5 {gridPoints.length === 0 ? '(no data)' : 'grid'}
+            </button>
+
+            {era5On && gridPoints.length > 0 && (
+              <>
+                {(['temperature', 'precipitation', 'wind_speed'] as WeatherVariable[]).map(v => (
+                  <button
+                    key={v}
+                    onClick={() => setEra5Variable(v)}
+                    className={`px-2 py-1 rounded text-xs transition-colors ${
+                      era5Variable === v ? 'bg-slate-500 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {v === 'temperature' ? 'Temp' : v === 'precipitation' ? 'Rain' : 'Wind'}
+                  </button>
+                ))}
+                <WeatherGridLegend variable={era5Variable} />
+                <div className="flex items-center gap-2 ml-auto">
+                  <span className="text-xs text-slate-400">Hour</span>
+                  <input
+                    type="range" min={0} max={23} value={era5Hour}
+                    onChange={e => setEra5Hour(+e.target.value)}
+                    className="w-24 accent-blue-500"
+                  />
+                  <span className="text-xs text-slate-300 w-10">{String(era5Hour).padStart(2, '0')}:00</span>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Radar row */}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setRadarOn(v => !v)}
+              disabled={radarTs.length === 0}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                radarOn && radarTs.length > 0
+                  ? 'bg-sky-600 text-white'
+                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-40'
+              }`}
+            >
+              Radar {radarTs.length === 0 ? '(not available)' : `(${radarTs.length} frames)`}
+            </button>
+
+            {radarOn && radarTs.length > 0 && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="range" min={0} max={radarTs.length - 1} value={radarTsIdx}
+                  onChange={e => setRadarTsIdx(+e.target.value)}
+                  className="w-32 accent-sky-500"
+                />
+                <span className="text-xs text-slate-300">
+                  {new Date(radarTs[radarTsIdx] * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

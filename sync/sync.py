@@ -9,6 +9,7 @@ import os
 import json
 import time
 import logging
+import threading
 from datetime import date, timedelta, datetime, timezone
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from dotenv import load_dotenv
 from garminconnect import Garmin
 
 import db
+import weather as wx
 
 try:
     import reverse_geocoder as rg
@@ -249,6 +251,42 @@ def ensure_schema():
 
             # 9. Migrate GARMIN_EMAIL/PASSWORD env vars → admin user (backward compat)
             _migrate_env_credentials(conn, admin_id)
+
+            # 10. Weather columns on activities
+            cur.execute("""
+                ALTER TABLE activities
+                    ADD COLUMN IF NOT EXISTS weather_grid_fetched BOOLEAN DEFAULT FALSE,
+                    ADD COLUMN IF NOT EXISTS radar_timestamps     BIGINT[]
+            """)
+            conn.commit()
+
+            # 11. Shared weather tables (no user_id — shared across all users)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS weather_grid_points (
+                    lat                FLOAT    NOT NULL,
+                    lng                FLOAT    NOT NULL,
+                    date               DATE     NOT NULL,
+                    hour               SMALLINT NOT NULL,
+                    temperature_2m     FLOAT,
+                    precipitation      FLOAT,
+                    wind_speed_10m     FLOAT,
+                    wind_direction_10m FLOAT,
+                    fetched_at         TIMESTAMPTZ DEFAULT NOW(),
+                    PRIMARY KEY (lat, lng, date, hour)
+                );
+                CREATE TABLE IF NOT EXISTS weather_radar_tiles (
+                    timestamp_unix BIGINT   NOT NULL,
+                    z              SMALLINT NOT NULL,
+                    x              INTEGER  NOT NULL,
+                    y              INTEGER  NOT NULL,
+                    tile_data      BYTEA    NOT NULL,
+                    fetched_at     TIMESTAMPTZ DEFAULT NOW(),
+                    PRIMARY KEY (timestamp_unix, z, x, y)
+                );
+                CREATE INDEX IF NOT EXISTS idx_grid_points_area
+                    ON weather_grid_points(date, lat, lng)
+            """)
+            conn.commit()
 
         log.info("Schema check done.")
     finally:
@@ -750,10 +788,122 @@ def sync_user(garmin_client: Garmin, user_id: int):
     conn.close()
 
 
+# ─── Weather background loops ─────────────────────────────────────────────────
+
+RADAR_INTERVAL = int(os.getenv("RADAR_CHECK_INTERVAL_SECONDS", 900))   # 15 min default
+ERA5_INTERVAL  = int(os.getenv("ERA5_CHECK_INTERVAL_SECONDS",  1800))  # 30 min default
+
+
+def _radar_loop():
+    """Download RainViewer radar tiles for recent activities. Runs every 15 min."""
+    while True:
+        try:
+            conn = db.get_conn()
+            frames = wx.fetch_rainviewer_frames()
+            if not frames:
+                log.info("Radar: no frames available from RainViewer")
+                conn.close()
+                time.sleep(RADAR_INTERVAL)
+                continue
+
+            activities = db.get_recent_activities_for_radar(conn, hours=wx.RADAR_WINDOW_HOURS)
+            if not activities:
+                conn.close()
+                time.sleep(RADAR_INTERVAL)
+                continue
+
+            log.info(f"Radar: checking {len(activities)} recent activities against {len(frames)} frames")
+            total_tiles = 0
+            for act in activities:
+                try:
+                    polyline = act["polyline"] if isinstance(act["polyline"], list) else json.loads(act["polyline"])
+                    if not polyline:
+                        continue
+
+                    start_time = act["start_time"]
+                    if start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=timezone.utc)
+
+                    matching = wx.frames_for_activity(frames, start_time, act["duration_seconds"])
+                    if not matching:
+                        # No radar coverage — still mark so we don't retry forever
+                        db.update_activity_radar_timestamps(conn, act["user_id"], act["activity_id"], [])
+                        continue
+
+                    tiles = wx.tiles_for_polyline(polyline, wx.RADAR_ZOOM)
+                    saved_ts = []
+                    for frame in matching:
+                        ts_saved = True
+                        for (x, y) in tiles:
+                            if db.radar_tile_exists(conn, frame["timestamp"], wx.RADAR_ZOOM, x, y):
+                                continue
+                            data = wx.download_tile(frame["host"], frame["path"], wx.RADAR_ZOOM, x, y)
+                            if data:
+                                db.upsert_radar_tile(conn, frame["timestamp"], wx.RADAR_ZOOM, x, y, data)
+                                total_tiles += 1
+                            else:
+                                ts_saved = False
+                            time.sleep(0.1)
+                        if ts_saved:
+                            saved_ts.append(frame["timestamp"])
+
+                    db.update_activity_radar_timestamps(conn, act["user_id"], act["activity_id"], saved_ts)
+                except Exception as e:
+                    log.warning(f"Radar: activity {act['activity_id']} failed: {e}")
+
+            if total_tiles:
+                log.info(f"Radar: downloaded {total_tiles} new tiles")
+            conn.close()
+        except Exception as e:
+            log.error(f"Radar loop error: {e}", exc_info=True)
+        time.sleep(RADAR_INTERVAL)
+
+
+def _era5_loop():
+    """Fetch ERA5 grid for activities that don't have it yet. Runs every 30 min."""
+    while True:
+        try:
+            conn = db.get_conn()
+            activities = db.get_activities_needing_era5(conn, limit=8)
+            if activities:
+                log.info(f"ERA5: processing {len(activities)} activities")
+            for act in activities:
+                try:
+                    polyline = act["polyline"] if isinstance(act["polyline"], list) else json.loads(act["polyline"])
+                    if not polyline or len(polyline) < 2:
+                        db.mark_activity_grid_fetched(conn, act["user_id"], act["activity_id"])
+                        continue
+
+                    min_lat, max_lat, min_lng, max_lng = wx.grid_bbox(polyline)
+
+                    # Check if another activity already populated this area
+                    if db.grid_exists_for_area(conn, min_lat, max_lat, min_lng, max_lng, act["date"]):
+                        db.mark_activity_grid_fetched(conn, act["user_id"], act["activity_id"])
+                        continue
+
+                    grid_data = wx.fetch_era5_grid(polyline, act["date"])
+                    rows = wx.era5_to_rows(grid_data, act["date"])
+                    if rows:
+                        db.upsert_weather_grid(conn, rows)
+                        log.info(f"ERA5: stored {len(rows)} grid rows for activity {act['activity_id']}")
+                    db.mark_activity_grid_fetched(conn, act["user_id"], act["activity_id"])
+                except Exception as e:
+                    log.warning(f"ERA5: activity {act['activity_id']} failed: {e}")
+            conn.close()
+        except Exception as e:
+            log.error(f"ERA5 loop error: {e}", exc_info=True)
+        time.sleep(ERA5_INTERVAL)
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     ensure_schema()
+
+    # Start weather background threads
+    threading.Thread(target=_radar_loop, daemon=True, name="radar").start()
+    threading.Thread(target=_era5_loop,  daemon=True, name="era5").start()
+    log.info("Weather threads started (radar every 15min, ERA5 every 30min)")
 
     while True:
         users = get_users_with_credentials()

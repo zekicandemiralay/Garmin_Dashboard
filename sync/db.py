@@ -159,3 +159,104 @@ def upsert_activity_gps(conn, activity_id: int, polyline: list | None, user_id: 
             (json.dumps(polyline) if polyline else None, activity_id, user_id),
         )
     conn.commit()
+
+
+# ─── Shared weather tables (no user_id) ──────────────────────────────────────
+
+def upsert_weather_grid(conn, rows: list[dict]):
+    if not rows:
+        return
+    sql = """
+        INSERT INTO weather_grid_points
+            (lat, lng, date, hour, temperature_2m, precipitation, wind_speed_10m, wind_direction_10m)
+        VALUES %s
+        ON CONFLICT (lat, lng, date, hour) DO NOTHING
+    """
+    values = [(
+        r["lat"], r["lng"], r["date"], r["hour"],
+        r.get("temperature_2m"), r.get("precipitation"),
+        r.get("wind_speed_10m"), r.get("wind_direction_10m"),
+    ) for r in rows]
+    with conn.cursor() as cur:
+        execute_values(cur, sql, values)
+    conn.commit()
+
+
+def upsert_radar_tile(conn, timestamp: int, z: int, x: int, y: int, tile_data: bytes):
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO weather_radar_tiles (timestamp_unix, z, x, y, tile_data)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (timestamp_unix, z, x, y) DO NOTHING
+        """, (timestamp, z, x, y, tile_data))
+    conn.commit()
+
+
+def radar_tile_exists(conn, timestamp: int, z: int, x: int, y: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM weather_radar_tiles WHERE timestamp_unix=%s AND z=%s AND x=%s AND y=%s",
+            (timestamp, z, x, y)
+        )
+        return cur.fetchone() is not None
+
+
+def update_activity_radar_timestamps(conn, user_id: int, activity_id: int, timestamps: list[int]):
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE activities SET radar_timestamps = %s WHERE activity_id = %s AND user_id = %s",
+            (timestamps or [], activity_id, user_id),
+        )
+    conn.commit()
+
+
+def mark_activity_grid_fetched(conn, user_id: int, activity_id: int):
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE activities SET weather_grid_fetched = TRUE WHERE activity_id = %s AND user_id = %s",
+            (activity_id, user_id),
+        )
+    conn.commit()
+
+
+def grid_exists_for_area(conn, min_lat: float, max_lat: float, min_lng: float, max_lng: float, act_date) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT 1 FROM weather_grid_points
+            WHERE date = %s AND lat BETWEEN %s AND %s AND lng BETWEEN %s AND %s
+            LIMIT 1
+        """, (act_date, min_lat, max_lat, min_lng, max_lng))
+        return cur.fetchone() is not None
+
+
+def get_activities_needing_era5(conn, limit: int = 8) -> list[dict]:
+    """Activities that haven't had their ERA5 grid fetched yet (cross-user)."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT activity_id, user_id, start_time::date AS act_date, polyline
+            FROM activities
+            WHERE polyline IS NOT NULL AND weather_grid_fetched = FALSE
+            ORDER BY start_time DESC
+            LIMIT %s
+        """, (limit,))
+        rows = cur.fetchall()
+    return [{"activity_id": r[0], "user_id": r[1], "date": r[2], "polyline": r[3]} for r in rows]
+
+
+def get_recent_activities_for_radar(conn, hours: float = 2.5) -> list[dict]:
+    """Recent activities whose radar hasn't been attempted (cross-user)."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT activity_id, user_id, start_time, duration_seconds, polyline
+            FROM activities
+            WHERE start_time >= %s
+              AND polyline IS NOT NULL
+              AND (radar_timestamps IS NULL OR cardinality(radar_timestamps) = 0)
+            ORDER BY start_time DESC
+            LIMIT 100
+        """, (cutoff,))
+        rows = cur.fetchall()
+    return [{"activity_id": r[0], "user_id": r[1], "start_time": r[2],
+             "duration_seconds": r[3], "polyline": r[4]} for r in rows]

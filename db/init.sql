@@ -117,8 +117,34 @@ CREATE TABLE IF NOT EXISTS tour_activities (
     PRIMARY KEY (tour_id, activity_id)
 );
 
+-- ERA5 weather grid — shared across users, keyed by rounded lat/lng + date + hour
+CREATE TABLE IF NOT EXISTS weather_grid_points (
+    lat                FLOAT    NOT NULL,
+    lng                FLOAT    NOT NULL,
+    date               DATE     NOT NULL,
+    hour               SMALLINT NOT NULL,
+    temperature_2m     FLOAT,
+    precipitation      FLOAT,
+    wind_speed_10m     FLOAT,
+    wind_direction_10m FLOAT,
+    fetched_at         TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (lat, lng, date, hour)
+);
+
+-- RainViewer radar tiles — shared, stored permanently by unix timestamp + tile coords
+CREATE TABLE IF NOT EXISTS weather_radar_tiles (
+    timestamp_unix BIGINT   NOT NULL,
+    z              SMALLINT NOT NULL,
+    x              INTEGER  NOT NULL,
+    y              INTEGER  NOT NULL,
+    tile_data      BYTEA    NOT NULL,
+    fetched_at     TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (timestamp_unix, z, x, y)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_activities_user_start ON activities(user_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_daily_user_date       ON daily_summary(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_sleep_user_date       ON sleep(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_tours_user            ON tours(user_id);
+CREATE INDEX IF NOT EXISTS idx_grid_points_area      ON weather_grid_points(date, lat, lng);

@@ -7,6 +7,7 @@ from typing import Optional, List
 
 from fastapi import FastAPI, Query, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 import db
@@ -615,3 +616,76 @@ def update_tour(tour_id: int, body: TourUpdate, user: dict = Depends(get_current
 def delete_tour(tour_id: int, user: dict = Depends(get_current_user)):
     with db.cursor() as cur:
         cur.execute("DELETE FROM tours WHERE id = %s AND user_id = %s", (tour_id, user["id"]))
+
+
+# ─── Weather ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/activities/{activity_id}/weather-grid")
+def get_weather_grid(activity_id: int, user: dict = Depends(get_current_user)):
+    """Return shared ERA5 grid points covering the activity's bounding box and date."""
+    import json as _json
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT polyline, start_time::date AS act_date FROM activities WHERE activity_id = %s AND user_id = %s",
+            (activity_id, user["id"]),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    if not row["polyline"]:
+        return {"points": []}
+
+    pts  = row["polyline"] if isinstance(row["polyline"], list) else _json.loads(row["polyline"])
+    lats = [p[0] for p in pts]
+    lngs = [p[1] for p in pts]
+    buf  = 0.6
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT lat, lng, hour, temperature_2m, precipitation,
+                   wind_speed_10m, wind_direction_10m
+            FROM weather_grid_points
+            WHERE date = %s
+              AND lat BETWEEN %s AND %s
+              AND lng BETWEEN %s AND %s
+            ORDER BY lat, lng, hour
+        """, (row["act_date"], min(lats) - buf, max(lats) + buf, min(lngs) - buf, max(lngs) + buf))
+        rows = cur.fetchall()
+    return {"points": rows}
+
+
+@app.get("/api/activities/{activity_id}/radar-timestamps")
+def get_radar_timestamps(activity_id: int, user: dict = Depends(get_current_user)):
+    """Return RainViewer timestamps stored for this activity."""
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT radar_timestamps FROM activities WHERE activity_id = %s AND user_id = %s",
+            (activity_id, user["id"]),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return {"timestamps": row["radar_timestamps"] or [], "zoom": 6}
+
+
+@app.get("/api/radar/{timestamp}/{z}/{x}/{y}")
+def get_radar_tile(timestamp: int, z: int, x: int, y: int):
+    """Serve a stored radar tile PNG. No auth — weather data is non-sensitive."""
+    STORED_ZOOM = 6
+    # Map any requested zoom to stored zoom 6
+    if z > STORED_ZOOM:
+        factor = 2 ** (z - STORED_ZOOM)
+        x, y = x // factor, y // factor
+    elif z < STORED_ZOOM:
+        factor = 2 ** (STORED_ZOOM - z)
+        x, y = x * factor, y * factor
+    z = STORED_ZOOM
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT tile_data FROM weather_radar_tiles WHERE timestamp_unix=%s AND z=%s AND x=%s AND y=%s",
+            (timestamp, z, x, y),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404)
+    return Response(content=bytes(row["tile_data"]), media_type="image/png")

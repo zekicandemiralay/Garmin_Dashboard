@@ -147,3 +147,11 @@ export function updateTour(id: number, data: { name: string; description: string
 export function deleteTour(id: number): Promise<void> {
   return del(`/api/tours/${id}`)
 }
+
+export function fetchWeatherGrid(activityId: number): Promise<{ points: import('./types').WeatherGridPoint[] }> {
+  return get(`/api/activities/${activityId}/weather-grid`)
+}
+
+export function fetchRadarTimestamps(activityId: number): Promise<{ timestamps: number[]; zoom: number }> {
+  return get(`/api/activities/${activityId}/radar-timestamps`)
+}

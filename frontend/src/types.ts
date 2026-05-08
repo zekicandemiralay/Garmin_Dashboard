@@ -185,6 +185,16 @@ export interface CountryStat {
   types: CountryTypeStat[]
 }
 
+export interface WeatherGridPoint {
+  lat: number
+  lng: number
+  hour: number
+  temperature_2m: number | null
+  precipitation: number | null
+  wind_speed_10m: number | null
+  wind_direction_10m: number | null
+}
+
 export interface Summary {
   period_7d: {
     daily: {
