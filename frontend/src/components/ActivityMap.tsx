@@ -1,4 +1,4 @@
-import { useEffect, useState, Fragment } from 'react'
+import { useEffect, useState, useMemo, Fragment } from 'react'
 import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import type { MapActivity, WeatherGridPoint } from '../types'
@@ -198,6 +198,7 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
   const [era5On,        setEra5On]        = useState(false)
   const [radarOn,       setRadarOn]       = useState(false)
   const [radarTsIdx,    setRadarTsIdx]    = useState(0)
+  const [era5Range,     setEra5Range]     = useState<{ min: number; max: number } | null>(null)
   const [weatherLoading, setWeatherLoading] = useState(false)
 
   useEffect(() => {
@@ -214,7 +215,7 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
   // Fetch weather data whenever selected activity changes
   useEffect(() => {
     if (selectedId == null) {
-      setGridPoints([]); setRadarTs([]); setEra5On(false); setRadarOn(false)
+      setGridPoints([]); setRadarTs([]); setEra5On(false); setRadarOn(false); setEra5Range(null)
       return
     }
     setWeatherLoading(true)
@@ -270,6 +271,9 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
     if (a.polyline?.length) a.polyline.forEach(p => pts.push([p[0], p[1]]))
     return pts
   })
+
+  const selectedActivity = useMemo(() => data.find(a => a.activity_id === selectedId) ?? null, [data, selectedId])
+  const era5Date = selectedActivity ? selectedActivity.start_time.slice(0, 10) : undefined
 
   const hasAnyRoute = visible.some(a => (a.polyline?.length ?? 0) > 2)
   const isCustom    = fetched.start !== defaultStart || fetched.end !== defaultEnd
@@ -341,7 +345,10 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
             {allPts.length > 0 && <AutoFit pts={allPts} />}
             <DeselectOnMapClick onDeselect={() => setSelectedId(null)} />
             {era5On && gridPoints.length > 0 && (
-              <WeatherGridLayer points={gridPoints} variable={era5Variable} hour={era5Hour} />
+              <WeatherGridLayer
+                points={gridPoints} variable={era5Variable} hour={era5Hour} date={era5Date}
+                onRangeComputed={(min, max) => setEra5Range({ min, max })}
+              />
             )}
             {radarOn && radarTs.length > 0 && (
               <RadarTileLayer timestamp={radarTs[radarTsIdx]} />
@@ -456,7 +463,7 @@ export default function ActivityMap({ start: defaultStart, end: defaultEnd, high
                     {v === 'temperature' ? 'Temp' : v === 'precipitation' ? 'Rain' : 'Wind'}
                   </button>
                 ))}
-                <WeatherGridLegend variable={era5Variable} />
+                <WeatherGridLegend variable={era5Variable} min={era5Range?.min} max={era5Range?.max} />
                 <div className="flex items-center gap-2 ml-auto">
                   <span className="text-xs text-slate-400">Hour</span>
                   <input

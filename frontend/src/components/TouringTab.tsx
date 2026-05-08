@@ -5,9 +5,12 @@ import {
   fetchTouringData, fetchActivities, fetchTours,
   createTour as apiCreateTour, fetchTourDetail,
   updateTour as apiUpdateTour, deleteTour as apiDeleteTour,
+  fetchWeatherGridForActivities,
 } from '../api'
-import type { TouringActivity, TouringData, WeatherHourly, TourSummary, TourDetail } from '../types'
+import type { TouringActivity, TouringData, WeatherHourly, TourSummary, TourDetail, WeatherGridPoint } from '../types'
 import type { Activity } from '../types'
+import WeatherGridLayer, { WeatherGridLegend } from './WeatherGridLayer'
+import type { WeatherVariable } from './WeatherGridLayer'
 import TrainingLoadChart from './TrainingLoadChart'
 import ActivityPaceChart from './ActivityPaceChart'
 
@@ -410,6 +413,11 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
   const [sliderValue, setSliderValue] = useState(0)
   const [topo, setTopo] = useState(false)
   const [weatherLayer, setWeatherLayer] = useState<WeatherLayer>('default')
+  const [era5On, setEra5On] = useState(false)
+  const [era5Points, setEra5Points] = useState<WeatherGridPoint[]>([])
+  const [era5Variable, setEra5Variable] = useState<WeatherVariable>('temperature')
+  const [era5Loading, setEra5Loading] = useState(false)
+  const [era5Range, setEra5Range] = useState<{ min: number; max: number } | null>(null)
 
   const fitKey = useMemo(() => activities.map(a => a.activity_id).join(','), [activities])
 
@@ -479,6 +487,27 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
     }).filter(Boolean) as { lat: number; lng: number; date: string; score: number | null; hours: number | null }[]
   }, [activities, sleep])
 
+  // Fetch ERA5 grid for all activities the first time the layer is toggled on
+  useEffect(() => {
+    if (!era5On || era5Points.length > 0) return
+    setEra5Loading(true)
+    fetchWeatherGridForActivities(activities.map(a => a.activity_id))
+      .then(pts => setEra5Points(pts))
+      .catch(() => {})
+      .finally(() => setEra5Loading(false))
+  }, [era5On, activities])
+
+  // Reset ERA5 data when activities change (different tour/period)
+  useEffect(() => {
+    setEra5Points([])
+    setEra5Range(null)
+    setEra5On(false)
+  }, [activities])
+
+  // Date + hour for ERA5 layer derived from the timeline slider position
+  const era5Date = new Date(currentMs).toISOString().slice(0, 10)
+  const era5Hour = new Date(currentMs).getUTCHours()
+
   const totalStats = useMemo(() => ({
     distance: activities.reduce((s, a) => s + (a.distance_meters ?? 0), 0),
     elevation: activities.reduce((s, a) => s + (a.elevation_gain_m ?? 0), 0),
@@ -520,6 +549,12 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
               />
             )}
             {allPts.length > 0 && <AutoFit pts={allPts} fitKey={fitKey} />}
+            {era5On && era5Points.length > 0 && (
+              <WeatherGridLayer
+                points={era5Points} variable={era5Variable} hour={era5Hour} date={era5Date}
+                onRangeComputed={(min, max) => setEra5Range({ min, max })}
+              />
+            )}
             {activities.map(a => (
               <WeatherPolyline key={a.activity_id} act={a} layer={weatherLayer} />
             ))}
@@ -591,7 +626,7 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {(['default', 'temperature', 'wind'] as WeatherLayer[]).map(layer => (
               <button key={layer} onClick={() => setWeatherLayer(layer)}
                 className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
@@ -603,6 +638,39 @@ function TourMapView({ activities, sleep }: { activities: TouringActivity[]; sle
                 {layer === 'default' ? '🎨 Route' : layer === 'temperature' ? '🌡 Temp' : '💨 Wind'}
               </button>
             ))}
+
+            <div className="w-px h-4 bg-slate-600 mx-1" />
+
+            {/* ERA5 grid toggle */}
+            <button
+              onClick={() => setEra5On(v => !v)}
+              className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                era5On
+                  ? 'bg-purple-600/30 border-purple-500/60 text-purple-300'
+                  : 'bg-slate-700 border-slate-600 text-slate-400 hover:text-white'
+              }`}
+            >
+              {era5Loading ? '⏳ ERA5' : '🌐 ERA5'}
+            </button>
+            {era5On && (
+              <>
+                {(['temperature', 'precipitation', 'wind_speed'] as WeatherVariable[]).map(v => (
+                  <button
+                    key={v}
+                    onClick={() => setEra5Variable(v)}
+                    className={`px-2 py-1 rounded text-xs transition-colors border ${
+                      era5Variable === v
+                        ? 'bg-slate-500/50 border-slate-400 text-white'
+                        : 'bg-slate-700 border-slate-600 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {v === 'temperature' ? 'Temp' : v === 'precipitation' ? 'Rain' : 'Wind'}
+                  </button>
+                ))}
+                <WeatherGridLegend variable={era5Variable} min={era5Range?.min} max={era5Range?.max} />
+              </>
+            )}
+
             <button
               onClick={() => setTopo(t => !t)}
               className={`ml-auto px-2.5 py-1 rounded text-xs font-medium border transition-colors ${

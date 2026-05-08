@@ -188,6 +188,7 @@ export interface CountryStat {
 export interface WeatherGridPoint {
   lat: number
   lng: number
+  date: string
   hour: number
   temperature_2m: number | null
   precipitation: number | null

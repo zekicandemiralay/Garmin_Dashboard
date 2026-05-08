@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 
 ARCHIVE_CUTOFF_DAYS = 5
 GRID_RESOLUTION     = 0.25   # degrees — matches ERA5 native grid
-GRID_BUFFER         = 0.5    # degrees of padding beyond activity bbox
+GRID_BUFFER         = 1.5    # degrees of padding beyond activity bbox
 RADAR_ZOOM          = 6      # tile zoom for radar download (~156km/tile)
 RADAR_WINDOW_HOURS  = 2.5    # how far back RainViewer keeps data
 ERA5_FIELDS         = "temperature_2m,precipitation,wind_speed_10m,wind_direction_10m"

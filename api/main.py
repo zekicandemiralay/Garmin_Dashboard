@@ -641,7 +641,7 @@ def get_weather_grid(activity_id: int, user: dict = Depends(get_current_user)):
     buf  = 0.6
     with db.cursor() as cur:
         cur.execute("""
-            SELECT lat, lng, hour, temperature_2m, precipitation,
+            SELECT lat, lng, date::text AS date, hour, temperature_2m, precipitation,
                    wind_speed_10m, wind_direction_10m
             FROM weather_grid_points
             WHERE date = %s
